@@ -1,4 +1,4 @@
-import type { Mastery, Mode } from '../types';
+import type { Level, Mastery, Mode } from '../types';
 
 export function todayISO(): string {
   const d = new Date();
@@ -13,7 +13,23 @@ export function clock(sec: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 export function plural(n: number, word: string, many?: string): string { return `${n} ${n === 1 ? word : many || word + 's'}`; }
-export const MODE_LABEL: Record<Mode, string> = { drill: 'Quick drill', weak: 'Weak-spot drill', full: 'Full practice test' };
+export const MODE_LABEL: Record<Mode, string> = { drill: 'Quick drill', weak: 'Weak-spot drill', full: 'Full practice test', review: 'Mistake review' };
+
+export const LEVELS: { id: Level; label: string; name: string; desc: string }[] = [
+  { id: 'rce', label: 'RCE', name: 'Regional', desc: 'Fundamentals: key terms, definitions, and one-step questions.' },
+  { id: 'slc', label: 'SLC', name: 'State', desc: 'Applied: short scenarios, close concepts, and quick calculations.' },
+  { id: 'nlc', label: 'NLC', name: 'National', desc: 'Hardest: multi-step problems and very close answer choices.' },
+];
+export const LEVEL_LABEL: Record<Level, string> = { rce: 'RCE', slc: 'SLC', nlc: 'NLC' };
+
+/** The level a member last picked for an event, remembered on this device. */
+export function savedLevel(eventId: string): Level {
+  try { const v = localStorage.getItem('fblaprep.level.' + eventId); if (v === 'rce' || v === 'slc' || v === 'nlc') return v; } catch { /* ignore */ }
+  return 'rce';
+}
+export function saveLevel(eventId: string, level: Level) {
+  try { localStorage.setItem('fblaprep.level.' + eventId, level); } catch { /* ignore */ }
+}
 
 /** Mastery for one event: percent correct across every topic, or null if never practiced. */
 export function eventMastery(m: Mastery[], eventId: string): { pct: number | null; attempts: number } {

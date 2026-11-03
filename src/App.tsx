@@ -7,6 +7,7 @@ import { EventDetail, EventList } from './pages/Practice';
 import { Session } from './pages/Session';
 import { Progress, Results } from './pages/Results';
 import { Admin } from './pages/Admin';
+import { Study } from './pages/Study';
 
 function NotFound() {
   return (
@@ -37,6 +38,7 @@ function Shell() {
           <Route index element={<Dashboard />} />
           <Route path="practice" element={<EventList />} />
           <Route path="practice/:eventId" element={<EventDetail />} />
+          <Route path="study/:eventId/:topic" element={<Study />} />
           <Route path="session" element={<Session />} />
           <Route path="results/:sessionId" element={<Results />} />
           <Route path="progress" element={<Progress />} />

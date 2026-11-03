@@ -1,6 +1,6 @@
 import { API_URL, DEMO } from './config';
 import { demoCall } from './demo';
-import type { AdminOverview, Dashboard, Mode, Results, StartRes, Topic } from '../types';
+import type { AdminOverview, Dashboard, Level, Mode, ReadinessRow, Results, StartRes, StudyNotes, Topic } from '../types';
 
 export class ApiError extends Error {
   code: string;
@@ -50,7 +50,8 @@ export async function call<T>(action: string, payload: Record<string, unknown> =
 
 export const api = {
   dashboard: () => call<Dashboard>('dashboard'),
-  start: (eventId: string, mode: Mode, topic?: string) => call<StartRes>('start', { eventId, mode, topic }),
+  start: (eventId: string, mode: Mode, level: Level, topic?: string) => call<StartRes>('start', { eventId, mode, level, topic }),
+  notes: (eventId: string, topic: string, regenerate = false) => call<StudyNotes>('notes', { eventId, topic, regenerate }),
   submit: (sessionId: string, answers: Record<string, number>, seconds: number) =>
     call<Results>('submit', { sessionId, answers, seconds }),
   results: (sessionId: string) => call<Results>('results', { sessionId }),
@@ -69,6 +70,7 @@ export const api = {
     loadFbla: (skip: string[]) =>
       call<{ added: number; loaded: string[]; failed: { id: string; name: string; error: string }[]; remaining: number }>('loadFbla', { skip }),
     reloadTopics: (eventId: string) => call<{ topics: Topic[]; note: string }>('reloadTopics', { eventId }),
+    readiness: () => call<ReadinessRow[]>('readiness'),
   },
 };
 

@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { useAuth } from '../lib/auth';
 import { useData } from '../lib/data';
 import { CLIENT_ID, DEMO, RCE_TESTING_DATE, mainSite } from '../lib/config';
-import { daysUntil, eventMastery, longDate, MODE_LABEL, shortDate, plural } from '../lib/format';
+import { daysUntil, eventMastery, LEVEL_LABEL, LEVELS, longDate, MODE_LABEL, shortDate, plural } from '../lib/format';
 import { Bar, btn, External, Loading, Notice } from '../components/Layout';
 
 function Countdown({ compact = false }: { compact?: boolean }) {
@@ -53,9 +53,9 @@ export function Landing() {
 
       <section className="mt-16 grid gap-6 md:grid-cols-3">
         {[
-          ['Pick your event', 'Every objective test your chapter competes in, with topics taken from this year’s guidelines.'],
-          ['Drill ten at a time', 'See right away whether you got each one, with a short explanation of the answer.'],
-          ['Take a full practice test', '100 questions in 50 minutes, like the real thing. You get your score and a topic breakdown at the end.'],
+          ['Pick your event and level', 'All 45 FBLA events with a test, built from the official 2026–27 guidelines. Practice at RCE, SLC, or NLC difficulty.'],
+          ['Study, then drill', 'Read an AI study guide for each topic, then drill it ten questions at a time with instant explanations.'],
+          ['Take full practice tests', '100 questions in 50 minutes, split like the real test. Every miss goes on your review list until you get it right.'],
         ].map(([title, body], i) => (
           <div key={title} className="cut bg-white p-6">
             <div className="font-wide text-4xl font-black text-gold">{i + 1}</div>
@@ -111,8 +111,21 @@ export function Dashboard() {
                     <span className="text-[14px] font-bold text-ink-2">{m.pct}% correct across {plural(m.attempts, 'question')}</span>
                   </div>
                   <div className="mt-3"><Bar pct={m.pct} /></div>
+                  {(() => {
+                    const bests = data.bests.filter((b) => b.eventId === e.id);
+                    return bests.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {LEVELS.filter((l) => bests.some((b) => b.level === l.id)).map((l) => (
+                          <span key={l.id} className="cut-sm bg-navy-100 px-2 py-0.5 text-[12px] font-black text-navy-900">{l.label} test best {bests.find((b) => b.level === l.id)!.best}%</span>
+                        ))}
+                      </div>
+                    );
+                  })()}
                   <div className="mt-4 flex flex-wrap gap-2">
                     <Link to={`/practice/${e.id}?go=weak`} className={btn.quiet}>Drill weak spots</Link>
+                    {(data.missed.find((x) => x.eventId === e.id)?.count || 0) > 0 && (
+                      <Link to={`/practice/${e.id}?go=review`} className={btn.quiet}>Review {plural(data.missed.find((x) => x.eventId === e.id)!.count, 'mistake')}</Link>
+                    )}
                     <Link to={`/practice/${e.id}`} className={btn.quiet}>More options</Link>
                   </div>
                 </div>
@@ -132,7 +145,7 @@ export function Dashboard() {
                   <Link to={`/results/${r.id}`} className="flex items-center justify-between gap-3 px-5 py-3.5 hover:bg-navy-100/50">
                     <span>
                       <span className="block font-bold text-navy-950">{r.eventName}</span>
-                      <span className="text-[13px] text-ink-2">{MODE_LABEL[r.mode]}, {shortDate(r.submitted)}</span>
+                      <span className="text-[13px] text-ink-2">{MODE_LABEL[r.mode]}{r.mode !== 'review' && r.level ? ` (${LEVEL_LABEL[r.level]})` : ''}, {shortDate(r.submitted)}</span>
                     </span>
                     <span className={`font-wide text-xl font-black ${r.pct >= 80 ? 'text-good' : r.pct >= 60 ? 'text-navy-900' : 'text-bad'}`}>{r.pct}%</span>
                   </Link>

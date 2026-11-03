@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { api, errorText } from '../lib/api';
 import { useData } from '../lib/data';
-import { clock, eventMastery, LETTERS, MODE_LABEL, plural, shortDate, topicMastery } from '../lib/format';
+import { clock, eventMastery, LETTERS, LEVEL_LABEL, MODE_LABEL, plural, savedLevel, shortDate, topicMastery } from '../lib/format';
 import { Bar, btn, Loading, Notice, PageHead } from '../components/Layout';
-import { SESSION_KEY } from './Practice';
+import { beginSession } from './Practice';
 import type { Results as ResultsT } from '../types';
 
 export function Results() {
@@ -32,20 +32,23 @@ export function Results() {
   async function drill(topic?: string) {
     setStarting(true);
     try {
-      const s = await api.start(res!.eventId, topic ? 'drill' : 'weak', topic);
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ start: s, answers: {}, checked: {}, review: [], index: 0, startedAt: Date.now() }));
+      await beginSession(res!.eventId, topic ? 'drill' : 'weak', res!.level || savedLevel(res!.eventId), topic);
       navigate('/session');
     } catch (e) { setError(errorText(e)); setStarting(false); }
   }
 
-  const verdict = res.pct >= 90 ? 'Ready for RCE.' : res.pct >= 75 ? 'Strong. Keep sharpening.' : res.pct >= 60 ? 'Getting there.' : 'Keep drilling.';
+  const lvl = res.level ? LEVEL_LABEL[res.level] : 'RCE';
+  const next = res.level === 'rce' ? 'SLC' : res.level === 'slc' ? 'NLC' : '';
+  const verdict = res.mode === 'review'
+    ? (res.pct === 100 ? 'All fixed.' : 'Getting there.')
+    : res.pct >= 90 ? (next ? `${lvl}-ready. Try ${next} next.` : 'National-level ready.') : res.pct >= 75 ? 'Strong. Keep sharpening.' : res.pct >= 60 ? 'Getting there.' : 'Keep drilling.';
 
   return (
     <div className="animate-rise">
       <section className="ledger cut-lg grid gap-8 px-6 py-10 pl-[84px] text-white sm:px-10 sm:pl-[96px] md:grid-cols-[auto_1fr] md:items-end">
         <div className="font-wide text-[clamp(88px,16vw,168px)] font-black leading-[0.8] tracking-tight text-gold">{res.pct}%</div>
         <div>
-          <p className="font-semiwide text-[15px] font-extrabold text-navy-200">{res.eventName}, {MODE_LABEL[res.mode].toLowerCase()}</p>
+          <p className="font-semiwide text-[15px] font-extrabold text-navy-200">{res.eventName}, {MODE_LABEL[res.mode].toLowerCase()}{res.mode !== 'review' && res.level ? `, ${LEVEL_LABEL[res.level]} level` : ''}</p>
           <h1 className="mt-2 font-wide text-[clamp(28px,4vw,42px)] font-black leading-none">{verdict}</h1>
           <p className="mt-3 text-[17px] text-navy-100">{res.correct} of {res.total} correct in {clock(res.seconds)}.</p>
         </div>
@@ -56,6 +59,7 @@ export function Results() {
           <button className={btn.gold} disabled={starting} onClick={() => drill(weakest.topic)}>{starting ? 'Starting…' : `Drill ${weakest.topic}`}</button>
         )}
         <button className={btn.navy} disabled={starting} onClick={() => drill()}>Weak-spot drill</button>
+        {missed.length > 0 && <Link to={`/practice/${res.eventId}?go=review`} className={btn.quiet}>Review my mistakes</Link>}
         <Link to={`/practice/${res.eventId}`} className={btn.quiet}>Back to {res.eventName}</Link>
       </div>
 
@@ -139,6 +143,18 @@ export function Progress() {
                 <span className="font-wide text-2xl font-black text-navy-950">{m.pct}%</span>
               </div>
               <p className="text-[14px] text-ink-2">{plural(m.attempts, 'question')} answered</p>
+              {data.bests.some((b) => b.eventId === e.id) && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {(['rce', 'slc', 'nlc'] as const).map((l) => {
+                    const b = data.bests.find((x) => x.eventId === e.id && x.level === l);
+                    return (
+                      <span key={l} className={`cut-sm px-3 py-1.5 text-[13px] font-bold ${b ? 'bg-navy-900 text-white' : 'bg-navy-100 text-ink-3'}`}>
+                        {LEVEL_LABEL[l]} test: {b ? `best ${b.best}%, ${plural(b.count, 'try', 'tries')}` : 'not taken'}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
               <div className="mt-4 grid gap-3">
                 {e.topics.map((t) => {
                   const tm = topicMastery(data.mastery, e.id, t.name);
@@ -169,7 +185,7 @@ export function Progress() {
                   <tr key={r.id} className="border-b border-line">
                     <td className="px-4 py-3">{shortDate(r.submitted)}</td>
                     <td className="px-4 py-3"><Link to={`/results/${r.id}`} className="font-bold text-navy-950 hover:text-blue">{r.eventName}</Link></td>
-                    <td className="px-4 py-3 text-ink-2">{MODE_LABEL[r.mode]}</td>
+                    <td className="px-4 py-3 text-ink-2">{MODE_LABEL[r.mode]}{r.mode !== 'review' && r.level ? ` (${LEVEL_LABEL[r.level]})` : ''}</td>
                     <td className="px-4 py-3 text-right font-black">{r.correct}/{r.total} ({r.pct}%)</td>
                   </tr>
                 ))}

@@ -18,22 +18,33 @@ export type Me = { email: string; name: string; picture: string; admin: boolean;
 export type Mastery = { eventId: string; topic: string; attempts: number; correct: number };
 
 export type SessionRow = {
-  id: string; eventId: string; eventName: string; mode: Mode;
+  id: string; eventId: string; eventName: string; mode: Mode; level: Level;
   total: number; correct: number; pct: number; submitted: string;
 };
 
-export type Dashboard = { me: Me; events: EventSummary[]; mastery: Mastery[]; recent: SessionRow[] };
+/** Best and latest full-practice-test scores per event and level. */
+export type Best = { eventId: string; level: Level; best: number; last: number; count: number };
 
-export type Mode = 'drill' | 'weak' | 'full';
+export type Dashboard = {
+  me: Me; events: EventSummary[]; mastery: Mastery[]; recent: SessionRow[];
+  /** How many missed questions are waiting for review, per event. */
+  missed: { eventId: string; count: number }[];
+  bests: Best[];
+};
+
+export type Mode = 'drill' | 'weak' | 'full' | 'review';
+
+/** Practice difficulty, named for the competition level it prepares you for. */
+export type Level = 'rce' | 'slc' | 'nlc';
 
 export type Question = {
-  id: string; topic: string; stem: string; choices: string[];
+  id: string; topic: string; stem: string; choices: string[]; difficulty?: 'easy' | 'medium' | 'hard';
   /** Included for drills, so feedback is instant. Withheld on full practice tests. */
   answer?: number; explanation?: string;
 };
 
 export type StartRes = {
-  sessionId: string; mode: Mode; eventId: string; eventName: string;
+  sessionId: string; mode: Mode; level: Level; eventId: string; eventName: string;
   timeLimit: number | null; questions: Question[]; generated: number;
 };
 
@@ -43,7 +54,7 @@ export type ReviewItem = {
 };
 
 export type Results = {
-  sessionId: string; eventId: string; eventName: string; mode: Mode;
+  sessionId: string; eventId: string; eventName: string; mode: Mode; level: Level;
   total: number; correct: number; pct: number; seconds: number; submitted: string;
   byTopic: { topic: string; total: number; correct: number }[];
   review: ReviewItem[];
@@ -55,3 +66,11 @@ export type FlaggedQuestion = {
 };
 
 export type AdminOverview = { events: EventSummary[]; flagged: FlaggedQuestion[]; target: number; aiReady: boolean; model: string };
+
+export type StudyNotes = { content: string; updated: string };
+
+export type ReadinessRow = {
+  eventId: string; eventName: string; category: string;
+  members: number; answered: number; accuracy: number | null;
+  byLevel: Record<Level, { tests: number; avg: number | null; best: number | null }>;
+};

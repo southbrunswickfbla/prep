@@ -3,7 +3,7 @@
  * so the site can be previewed before the Apps Script backend is connected.
  * It follows the same rules as the real backend (Code.gs).
  */
-import type { AdminOverview, Dashboard, EventSummary, Mode, Question, Results, SessionRow, StartRes, Topic } from '../types';
+import type { AdminOverview, Best, Dashboard, EventSummary, Level, Mode, Question, Results, SessionRow, StartRes, StudyNotes, Topic } from '../types';
 
 type Q = { id: string; eventId: string; topic: string; stem: string; choices: string[]; answer: number; explanation: string };
 type Ev = { id: string; name: string; category: string; topics: Topic[] };
@@ -76,12 +76,12 @@ const BANK: Q[] = RAW.map(([eventId, topic, stem, choices, answer, explanation],
 });
 
 const KEY = 'fblaprep.demo';
-type Store = { stats: Record<string, { attempts: number; correct: number; seen: string[] }>; sessions: (SessionRow & { detail: { q: string; c: number | null }[]; seconds: number })[] };
+type Store = { stats: Record<string, { attempts: number; correct: number; seen: string[]; missed?: string[] }>; sessions: (SessionRow & { detail: { q: string; c: number | null }[]; seconds: number })[] };
 function load(): Store {
   try { return JSON.parse(localStorage.getItem(KEY) || '') as Store; } catch { return { stats: {}, sessions: [] }; }
 }
 function save(s: Store) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* storage full or blocked */ } }
-const live = new Map<string, { eventId: string; mode: Mode; qids: string[]; started: number }>();
+const live = new Map<string, { eventId: string; mode: Mode; level: Level; qids: string[]; started: number }>();
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function summary(e: Ev): EventSummary {
@@ -119,7 +119,7 @@ function pick(e: Ev, mode: Mode, topic: string | undefined, s: Store): Q[] {
   return out;
 }
 
-function grade(sessionId: string, eventId: string, mode: Mode, qids: string[], answers: Record<string, number>, seconds: number, submitted: string): Results {
+function grade(sessionId: string, eventId: string, mode: Mode, level: Level, qids: string[], answers: Record<string, number>, seconds: number, submitted: string): Results {
   const e = EVENTS.find((x) => x.id === eventId)!;
   const review = qids.map((id) => BANK.find((q) => q.id === id)!).filter(Boolean).map((q) => {
     const chosen = typeof answers[q.id] === 'number' ? answers[q.id] : null;
@@ -127,7 +127,7 @@ function grade(sessionId: string, eventId: string, mode: Mode, qids: string[], a
   });
   const byTopic = e.topics.map((t) => ({ topic: t.name, total: review.filter((r) => r.topic === t.name).length, correct: review.filter((r) => r.topic === t.name && r.correct).length })).filter((t) => t.total);
   const correct = review.filter((r) => r.correct).length;
-  return { sessionId, eventId, eventName: e.name, mode, total: review.length, correct, pct: review.length ? Math.round((correct / review.length) * 100) : 0, seconds, submitted, byTopic, review };
+  return { sessionId, eventId, eventName: e.name, mode, level, total: review.length, correct, pct: review.length ? Math.round((correct / review.length) * 100) : 0, seconds, submitted, byTopic, review };
 }
 
 export async function demoCall(action: string, p: Record<string, unknown>): Promise<unknown> {
@@ -136,35 +136,54 @@ export async function demoCall(action: string, p: Record<string, unknown>): Prom
   switch (action) {
     case 'dashboard': {
       const mastery = Object.entries(s.stats).map(([k, v]) => ({ eventId: k.split('|')[0], topic: k.split('|')[1], attempts: v.attempts, correct: v.correct }));
-      const recent = s.sessions.slice(-12).reverse().map(({ detail: _d, seconds: _s, ...row }) => row);
-      return { me: { email: 'demo@sbstudents.org', name: 'Demo Member', picture: '', admin: true, staff: false }, events: EVENTS.map(summary), mastery, recent } satisfies Dashboard;
+      const recent = s.sessions.slice(-12).reverse().map(({ detail: _d, seconds: _s, ...row }) => ({ ...row, level: row.level || 'rce' }));
+      const missedMap: Record<string, number> = {};
+      Object.entries(s.stats).forEach(([k, v]) => { const ev = k.split('|')[0]; missedMap[ev] = (missedMap[ev] || 0) + (v.missed?.length || 0); });
+      const bestMap: Record<string, Best> = {};
+      s.sessions.filter((x) => x.mode === 'full').forEach((x) => {
+        const k = x.eventId + '|' + (x.level || 'rce');
+        const b = bestMap[k] || (bestMap[k] = { eventId: x.eventId, level: x.level || 'rce', best: 0, last: 0, count: 0 });
+        b.count++; b.best = Math.max(b.best, x.pct); b.last = x.pct;
+      });
+      return {
+        me: { email: 'demo@sbstudents.org', name: 'Demo Member', picture: '', admin: true, staff: false }, events: EVENTS.map(summary), mastery, recent,
+        missed: Object.entries(missedMap).filter(([, n]) => n > 0).map(([eventId, count]) => ({ eventId, count })),
+        bests: Object.values(bestMap),
+      } satisfies Dashboard;
     }
     case 'start': {
       const e = EVENTS.find((x) => x.id === p.eventId);
       if (!e) throw new Error('That event isn’t available.');
       const mode = p.mode as Mode;
-      const qs = pick(e, mode, (p.topic as string) || undefined, s);
+      const level = ((p.level as Level) || 'rce');
+      let qs: Q[];
+      if (mode === 'review') {
+        const ids = new Set(Object.entries(s.stats).filter(([k]) => k.startsWith(e.id + '|')).flatMap(([, v]) => v.missed || []));
+        qs = shuffle(BANK.filter((q) => ids.has(q.id))).slice(0, 10);
+        if (!qs.length) throw new Error('No missed questions to review for this event. Nice work.');
+      } else qs = pick(e, mode, (p.topic as string) || undefined, s);
       const sessionId = 'd' + Date.now().toString(36);
-      live.set(sessionId, { eventId: e.id, mode, qids: qs.map((q) => q.id), started: Date.now() });
+      live.set(sessionId, { eventId: e.id, mode, level, qids: qs.map((q) => q.id), started: Date.now() });
       const questions: Question[] = qs.map((q) => mode === 'full'
         ? { id: q.id, topic: q.topic, stem: q.stem, choices: q.choices }
         : { id: q.id, topic: q.topic, stem: q.stem, choices: q.choices, answer: q.answer, explanation: q.explanation });
-      return { sessionId, mode, eventId: e.id, eventName: e.name, timeLimit: mode === 'full' ? Math.round((qs.length / 100) * 50 * 60) : null, questions, generated: 0 } satisfies StartRes;
+      return { sessionId, mode, level, eventId: e.id, eventName: e.name, timeLimit: mode === 'full' ? Math.round((qs.length / 100) * 50 * 60) : null, questions, generated: 0 } satisfies StartRes;
     }
     case 'submit': {
       const sess = live.get(p.sessionId as string);
       if (!sess) throw new Error('This practice session expired. Start a new one.');
       const answers = (p.answers || {}) as Record<string, number>;
       const submitted = new Date().toISOString();
-      const res = grade(p.sessionId as string, sess.eventId, sess.mode, sess.qids, answers, Number(p.seconds) || 0, submitted);
+      const res = grade(p.sessionId as string, sess.eventId, sess.mode, sess.level, sess.qids, answers, Number(p.seconds) || 0, submitted);
       for (const r of res.review) {
         const k = sess.eventId + '|' + r.topic;
         const st = s.stats[k] || { attempts: 0, correct: 0, seen: [] };
         st.attempts += 1; if (r.correct) st.correct += 1;
         st.seen = [...st.seen.filter((x) => x !== r.id), r.id].slice(-200);
+        st.missed = [...(st.missed || []).filter((x) => x !== r.id), ...(r.correct ? [] : [r.id])].slice(-200);
         s.stats[k] = st;
       }
-      s.sessions.push({ id: res.sessionId, eventId: res.eventId, eventName: res.eventName, mode: res.mode, total: res.total, correct: res.correct, pct: res.pct, submitted, seconds: res.seconds, detail: res.review.map((r) => ({ q: r.id, c: r.chosen })) });
+      s.sessions.push({ id: res.sessionId, eventId: res.eventId, eventName: res.eventName, mode: res.mode, level: res.level, total: res.total, correct: res.correct, pct: res.pct, submitted, seconds: res.seconds, detail: res.review.map((r) => ({ q: r.id, c: r.chosen })) });
       s.sessions = s.sessions.slice(-50);
       save(s); live.delete(p.sessionId as string);
       return res;
@@ -174,9 +193,16 @@ export async function demoCall(action: string, p: Record<string, unknown>): Prom
       if (!row) throw new Error('Those results aren’t available anymore.');
       const answers: Record<string, number> = {};
       for (const d of row.detail) if (d.c !== null) answers[d.q] = d.c;
-      return grade(row.id, row.eventId, row.mode, row.detail.map((d) => d.q), answers, row.seconds, row.submitted);
+      return grade(row.id, row.eventId, row.mode, row.level || 'rce', row.detail.map((d) => d.q), answers, row.seconds, row.submitted);
     }
     case 'flag': return { hidden: false };
+    case 'notes': {
+      const t = String(p.topic);
+      const qs = BANK.filter((q) => q.topic === t).slice(0, 4);
+      const content = `## Key ideas\n${qs.map((q) => `- ${q.explanation}`).join('\n')}\n\n## Terms to know\n${qs.map((q) => `- **${q.choices[q.answer]}**: the answer to “${q.stem}”`).join('\n')}\n\n## Test traps\n- Read every choice before answering. Two choices are often close.\n- Watch for words like “not” and “best” in the question.`;
+      return { content, updated: new Date().toISOString() } satisfies StudyNotes;
+    }
+    case 'readiness': return [];
     case 'adminOverview':
       return { events: EVENTS.map(summary), flagged: [], target: 30, aiReady: false, model: 'Demo mode' } satisfies AdminOverview;
     default:

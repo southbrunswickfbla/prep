@@ -3,7 +3,7 @@ import { api, errorText } from '../lib/api';
 import { useData } from '../lib/data';
 import { LETTERS, plural } from '../lib/format';
 import { btn, External, Loading, Notice, PageHead } from '../components/Layout';
-import type { AdminOverview, EventSummary, Topic } from '../types';
+import type { AdminOverview, EventSummary, ReadinessRow, Topic } from '../types';
 
 const input = 'cut-sm w-full bg-paper px-3 py-2.5 text-[15px] outline-none inset-ring-1 inset-ring-line focus:inset-ring-2 focus:inset-ring-gold';
 
@@ -163,10 +163,12 @@ export function Admin() {
     void refresh();
   }
 
+  const [ready, setReady] = useState<ReadinessRow[] | null>(null);
   const load = useCallback(async () => {
     try { setOv(await api.admin.overview()); setError(''); } catch (e) { setError(errorText(e)); }
   }, []);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { api.admin.readiness().then(setReady).catch(() => setReady([])); }, []);
   const changed = useCallback(async () => { await load(); void refresh(); }, [load, refresh]);
 
   if (data && !data.me.admin) return <Notice tone="bad">The Admin page is for officers. Ask the chapter’s tech officer to add your email to ADMIN_EMAILS.</Notice>;
@@ -218,6 +220,40 @@ export function Admin() {
           finally { setBusy(''); }
         }}>{busy === 'add' ? 'Adding…' : 'Add events'}</button>
         {error && <div className="mt-3"><Notice tone="bad">{error}</Notice></div>}
+      </section>
+
+      <section className="mt-10">
+        <h2 className="font-semiwide text-2xl font-extrabold text-navy-950">Chapter readiness</h2>
+        <p className="mt-1 text-[14px] text-ink-2">Totals across members, with no names. Full-test scores show the average and best at each level.</p>
+        {!ready ? <Loading label="Adding up practice…" /> : ready.filter((r) => r.members > 0).length === 0 ? (
+          <p className="mt-4 text-ink-2">Nobody has practiced yet.</p>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[760px] border-collapse bg-white text-left text-[14px]">
+              <thead><tr className="bg-navy-900 text-white">
+                <th className="px-4 py-3 font-bold">Event</th>
+                <th className="px-4 py-3 text-right font-bold">Members</th>
+                <th className="px-4 py-3 text-right font-bold">Answered</th>
+                <th className="px-4 py-3 text-right font-bold">Accuracy</th>
+                {(['RCE', 'SLC', 'NLC'] as const).map((l) => <th key={l} className="px-4 py-3 text-right font-bold">{l} tests</th>)}
+              </tr></thead>
+              <tbody>
+                {ready.filter((r) => r.members > 0).map((r) => (
+                  <tr key={r.eventId} className="border-b border-line">
+                    <td className="px-4 py-3 font-bold text-navy-950">{r.eventName}</td>
+                    <td className="px-4 py-3 text-right">{r.members}</td>
+                    <td className="px-4 py-3 text-right">{r.answered}</td>
+                    <td className="px-4 py-3 text-right font-bold">{r.accuracy === null ? '–' : `${r.accuracy}%`}</td>
+                    {(['rce', 'slc', 'nlc'] as const).map((l) => {
+                      const b = r.byLevel[l];
+                      return <td key={l} className="px-4 py-3 text-right text-ink-2">{b.tests ? `${b.avg}% avg, ${b.best}% best (${b.tests})` : '–'}</td>;
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section className="mt-10">

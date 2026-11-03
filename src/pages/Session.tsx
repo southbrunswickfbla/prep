@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { api, errorText } from '../lib/api';
 import { useData } from '../lib/data';
-import { clock, LETTERS, MODE_LABEL, plural } from '../lib/format';
+import { clock, LETTERS, LEVEL_LABEL, MODE_LABEL, plural } from '../lib/format';
 import { btn, Notice } from '../components/Layout';
 import { SESSION_KEY } from './Practice';
 import type { Question, StartRes } from '../types';
@@ -162,7 +162,7 @@ export function Session() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="font-semiwide text-[15px] font-extrabold text-navy-950">{s.start.eventName}</div>
-          <div className="text-[14px] text-ink-2">{MODE_LABEL[s.start.mode]}</div>
+          <div className="text-[14px] text-ink-2">{MODE_LABEL[s.start.mode]}{s.start.mode !== 'review' && s.start.level ? `, ${LEVEL_LABEL[s.start.level]} level` : ''}</div>
         </div>
         <div className="flex items-center gap-3">
           {!isFull && checkedCount > 0 && <span className="cut-sm bg-good-100 px-3 py-1.5 text-[14px] font-bold text-good">{right} of {checkedCount} right</span>}

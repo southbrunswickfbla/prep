@@ -1,5 +1,5 @@
 /**
- * SBHS FBLA Prep — backend (Google Apps Script), v1
+ * SBHS FBLA Prep — backend (Google Apps Script), v2
  *
  * Paste this into the Apps Script project attached to the "FBLA Prep Data" Google Sheet,
  * save, then run setup() once. Full steps are in SETUP.md.
@@ -26,17 +26,35 @@
  *  TOPUP_BATCHES_PER_RUN default 2 (each batch is one AI call of up to 10 questions).
  */
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 
 const TABS = {
   Events:    ['id', 'name', 'category', 'topics', 'active', 'updated', 'guide', 'note'],
   Questions: ['id', 'eventId', 'topic', 'difficulty', 'stem', 'choices', 'answer', 'explanation', 'flags', 'status', 'created', 'source'],
-  Stats:     ['email', 'eventId', 'topic', 'attempts', 'correct', 'seen', 'updated'],
-  Sessions:  ['id', 'email', 'eventId', 'eventName', 'mode', 'total', 'correct', 'pct', 'seconds', 'started', 'submitted', 'detail'],
+  Stats:     ['email', 'eventId', 'topic', 'attempts', 'correct', 'seen', 'updated', 'missed'],
+  Sessions:  ['id', 'email', 'eventId', 'eventName', 'mode', 'total', 'correct', 'pct', 'seconds', 'started', 'submitted', 'detail', 'level'],
   Users:     ['email', 'name', 'firstSeen', 'lastSeen', 'sessions'],
   Flags:     ['time', 'email', 'questionId', 'reason'],
+  Notes:     ['eventId', 'topic', 'content', 'updated', 'source'],
 };
+
+/*
+ * Practice levels. Questions are written at three difficulties, and each level draws a different mix.
+ * RCE: fundamentals. SLC: applied. NLC: the hardest, national-level questions.
+ */
+const LEVELS = {
+  rce: { label: 'RCE', mix: { easy: 0.55, medium: 0.45 } },
+  slc: { label: 'SLC', mix: { easy: 0.15, medium: 0.6, hard: 0.25 } },
+  nlc: { label: 'NLC', mix: { medium: 0.3, hard: 0.7 } },
+};
+const DIFFICULTY_GUIDE = {
+  easy: 'Regional (RCE) level: foundational questions on definitions, key terms, and one-step ideas that a well-prepared first-time competitor should get right.',
+  medium: 'State (SLC) level: applied questions, such as short business scenarios, comparing similar concepts, and one- or two-step calculations.',
+  hard: 'National (NLC) level: the hardest questions, such as multi-step scenarios and calculations, subtle differences between very plausible choices, and specific terms, laws, and standards from the objectives.',
+};
+function levelOf(v) { return LEVELS[String(v || '').toLowerCase()] ? String(v).toLowerCase() : 'rce'; }
+function diffOf(q) { return ['easy', 'medium', 'hard'].indexOf(q.difficulty) >= 0 ? q.difficulty : 'medium'; }
 
 /* ====================== Web app entry points ====================== */
 
@@ -68,7 +86,8 @@ function doPost(e) {
 function route(action, b, user) {
   switch (action) {
     case 'dashboard': return dashboard(user);
-    case 'start': return startSession(user, String(b.eventId || ''), String(b.mode || 'drill'), b.topic ? String(b.topic) : '');
+    case 'start': return startSession(user, String(b.eventId || ''), String(b.mode || 'drill'), b.topic ? String(b.topic) : '', levelOf(b.level));
+    case 'notes': return studyNotes(user, String(b.eventId || ''), String(b.topic || ''), !!b.regenerate);
     case 'submit': return submitSession(user, String(b.sessionId || ''), b.answers || {}, Number(b.seconds) || 0);
     case 'results': return sessionResults(user, String(b.sessionId || ''));
     case 'flag': return flagQuestion(user, String(b.questionId || ''), String(b.reason || '').slice(0, 200));
@@ -84,6 +103,7 @@ function route(action, b, user) {
     case 'setQuestionStatus': return setQuestionStatus(String(b.id || ''), String(b.status || ''));
     case 'loadFbla': return adminLoadFbla(Array.isArray(b.skip) ? b.skip.map(String) : []);
     case 'reloadTopics': return adminReloadTopics(String(b.eventId || ''));
+    case 'readiness': return adminReadiness();
   }
   throw fail('bad_request', 'Unknown action.');
 }
@@ -223,6 +243,15 @@ function readAll(name, upTo) {
   return out;
 }
 
+/** Reads one column of a tab, by name. Lets a page skip a big column that sits before it. */
+function readColumn(name, col) {
+  const sh = sheet(name);
+  const last = sh.getLastRow();
+  const idx = TABS[name].indexOf(col);
+  if (last < 2 || idx < 0) return [];
+  return sh.getRange(2, idx + 1, last - 1, 1).getValues().map(function (r) { return r[0]; });
+}
+
 function toCells(name, obj) {
   return TABS[name].map(function (c) {
     const v = obj[c];
@@ -311,22 +340,39 @@ function eventSummaries(events) {
 
 function dashboard(user) {
   touchUser(user);
-  const mastery = readAll('Stats', 5).filter(function (r) { return r.email === user.email; }).map(function (r) {
+  const statRows = readAll('Stats').filter(function (r) { return r.email === user.email; });
+  const mastery = statRows.map(function (r) {
     return { eventId: String(r.eventId), topic: String(r.topic), attempts: Number(r.attempts) || 0, correct: Number(r.correct) || 0 };
   });
-  const recent = readAll('Sessions', 11).filter(function (r) { return r.email === user.email; })
-    .sort(function (a, b) { return String(b.submitted).localeCompare(String(a.submitted)); })
-    .slice(0, 30)
-    .map(sessionSummary);
+  const missed = {};
+  statRows.forEach(function (r) { missed[r.eventId] = (missed[r.eventId] || 0) + jsonArr(r.missed).length; });
+  const rows = sessionRowsFor(user.email);
+  const bests = {};
+  rows.forEach(function (r) {
+    if (r.mode !== 'full') return;
+    const k = r.eventId + '|' + r.level;
+    const b = bests[k] || (bests[k] = { eventId: String(r.eventId), level: r.level, best: 0, count: 0, last: 0, lastAt: '' });
+    b.count++;
+    b.best = Math.max(b.best, Number(r.pct) || 0);
+    if (String(r.submitted) > b.lastAt) { b.lastAt = String(r.submitted); b.last = Number(r.pct) || 0; }
+  });
   return {
     me: { email: user.email, name: user.name, picture: user.picture, admin: user.admin, staff: user.staff },
     events: eventSummaries(readEvents()),
     mastery: mastery,
-    recent: recent,
+    missed: Object.keys(missed).map(function (k) { return { eventId: k, count: missed[k] }; }).filter(function (m) { return m.count > 0; }),
+    bests: Object.keys(bests).map(function (k) { return bests[k]; }),
+    recent: rows.sort(function (a, b) { return String(b.submitted).localeCompare(String(a.submitted)); }).slice(0, 30).map(sessionSummary),
   };
 }
+/** A member's sessions without the big answer column, with each one's level. */
+function sessionRowsFor(email) {
+  const rows = readAll('Sessions', 11);
+  const levels = readColumn('Sessions', 'level');
+  return rows.map(function (r, i) { r.level = levelOf(levels[i]); return r; }).filter(function (r) { return r.email === email; });
+}
 function sessionSummary(r) {
-  return { id: String(r.id), eventId: String(r.eventId), eventName: String(r.eventName), mode: String(r.mode),
+  return { id: String(r.id), eventId: String(r.eventId), eventName: String(r.eventName), mode: String(r.mode), level: levelOf(r.level),
     total: Number(r.total) || 0, correct: Number(r.correct) || 0, pct: Number(r.pct) || 0, submitted: String(r.submitted) };
 }
 
@@ -336,7 +382,7 @@ function readStats(email, eventId) {
     if (r.email !== email || r.eventId !== eventId) return;
     const seen = {};
     jsonArr(r.seen).forEach(function (id) { seen[id] = true; });
-    out[r.topic] = { attempts: Number(r.attempts) || 0, correct: Number(r.correct) || 0, seen: seen };
+    out[r.topic] = { attempts: Number(r.attempts) || 0, correct: Number(r.correct) || 0, seen: seen, missed: jsonArr(r.missed) };
   });
   return out;
 }
@@ -371,77 +417,123 @@ function planCounts(topics, size, mode, stats) {
   return plan;
 }
 
-function startSession(user, eventId, mode, topic) {
-  if (['drill', 'weak', 'full'].indexOf(mode) < 0) throw fail('bad_request', 'Unknown practice type.');
+function startSession(user, eventId, mode, topic, level) {
+  if (['drill', 'weak', 'full', 'review'].indexOf(mode) < 0) throw fail('bad_request', 'Unknown practice type.');
   const ev = readEvents().filter(function (e) { return e.id === eventId; })[0];
   if (!ev) throw fail('not_found', 'That event isn’t available.');
-  if (!ev.topics.length) throw fail('not_ready', 'This event isn’t set up yet. Ask an officer to add its topics.');
+  if (!ev.topics.length) throw fail('not_ready', 'This event isn’t set up yet. Ask an officer to load its topics.');
   if (topic && !ev.topics.some(function (t) { return t.name === topic; })) throw fail('not_found', 'That topic isn’t part of this event.');
 
   let bank = readQuestions(ev.id).filter(function (q) { return q.status === 'active'; });
   const stats = readStats(user.email, ev.id);
-  const size = mode === 'full' ? num('FULL_TEST_SIZE', 100) : 10;
-  const topics = topic ? ev.topics.filter(function (t) { return t.name === topic; }) : ev.topics;
-  const plan = planCounts(topics, size, mode, stats);
+  const mix = LEVELS[level].mix;
+  let chosen = [];
   let generated = 0;
 
-  // Drills: if a topic is short on questions this member hasn't seen, have the AI write more now,
-  // until the topic holds BANK_MAX_PER_TOPIC questions. After that, members see repeats.
-  // Usually one AI call per drill so nobody waits long, or two when topics are nearly empty.
-  if (mode !== 'full') {
-    const cap = num('BANK_MAX_PER_TOPIC', 120);
-    const short = Object.keys(plan).map(function (name) {
+  if (mode === 'review') {
+    // Questions this member got wrong and hasn't answered correctly since.
+    const ids = {};
+    Object.keys(stats).forEach(function (t) { stats[t].missed.forEach(function (id) { ids[id] = true; }); });
+    chosen = shuffled(bank.filter(function (q) { return ids[q.id]; })).slice(0, 10);
+    if (!chosen.length) throw fail('nothing_missed', 'No missed questions to review for this event. Nice work.');
+  } else {
+    const size = mode === 'full' ? num('FULL_TEST_SIZE', 100) : 10;
+    const topics = topic ? ev.topics.filter(function (t) { return t.name === topic; }) : ev.topics;
+    const plan = planCounts(topics, size, mode, stats);
+    const allowed = function (q) { return mix[diffOf(q)] > 0; };
+
+    // Drills: write new questions at this level when a topic is short on ones the member hasn't seen.
+    // Usually one AI call, two when topics are nearly empty, so nobody waits long.
+    if (mode !== 'full') {
+      const cap = num('BANK_MAX_PER_TOPIC', 120);
+      const short = Object.keys(plan).map(function (name) {
+        const seen = stats[name] ? stats[name].seen : {};
+        const inTopic = bank.filter(function (q) { return q.topic === name; });
+        const atLevel = inTopic.filter(allowed).length;
+        // How many fresh questions of each difficulty this drill wants, versus how many exist.
+        let worst = null, missing = 0;
+        Object.keys(mix).forEach(function (d) {
+          const need = Math.ceil(plan[name] * mix[d]);
+          const fresh = inTopic.filter(function (q) { return diffOf(q) === d && !seen[q.id]; }).length;
+          const gap = need - fresh;
+          if (gap > 0) { missing += gap; if (!worst || gap > worst.gap) worst = { d: d, gap: gap }; }
+        });
+        return { name: name, missing: missing, difficulty: worst ? worst.d : null, atLevel: atLevel, total: inTopic.length };
+      }).filter(function (x) { return x.missing > 0 && (x.atLevel < plan[x.name] || x.total < cap); })
+        .sort(function (a, b) { return a.atLevel - b.atLevel || b.missing - a.missing; });
+      const urgent = short.filter(function (x) { return x.atLevel < plan[x.name]; });
+      (urgent.length ? urgent.slice(0, 2) : short.slice(0, 1)).forEach(function (sh) {
+        try {
+          const rows = generateQuestions(ev, sh.name, Math.max(sh.missing, 8), sh.difficulty || neediestDifficulty(bank, sh.name, mix));
+          generated += rows.length;
+          bank = bank.concat(rows.map(qFromRow));
+        } catch (err) {
+          if (!bank.some(function (q) { return q.topic === sh.name; })) throw err;
+        }
+      });
+    }
+
+    const used = {};
+    Object.keys(plan).forEach(function (name) {
       const seen = stats[name] ? stats[name].seen : {};
-      const inTopic = bank.filter(function (q) { return q.topic === name; });
-      const fresh = inTopic.filter(function (q) { return !seen[q.id]; }).length;
-      return { name: name, missing: plan[name] - fresh, total: inTopic.length };
-    }).filter(function (x) { return x.missing > 0 && (x.total < plan[x.name] || x.total < cap); })
-      .sort(function (a, b) { return a.total - b.total || b.missing - a.missing; });
-    const urgent = short.filter(function (x) { return x.total < plan[x.name]; });
-    (urgent.length ? urgent.slice(0, 2) : short.slice(0, 1)).forEach(function (s) {
-      try {
-        const rows = generateQuestions(ev, s.name, Math.max(s.missing, 8));
-        generated += rows.length;
-        bank = bank.concat(rows.map(qFromRow));
-      } catch (err) {
-        // Old questions are fine if the AI is busy, but with none at all there's nothing to practice.
-        if (!bank.some(function (q) { return q.topic === s.name; })) throw err;
+      const pool = shuffled(bank.filter(function (q) { return q.topic === name; }));
+      for (let k = 0; k < plan[name]; k++) {
+        const want = pickDifficulty(mix);
+        const order = [
+          function (q) { return diffOf(q) === want && !seen[q.id]; },
+          function (q) { return allowed(q) && !seen[q.id]; },
+          function (q) { return allowed(q); },
+          function () { return true; },
+        ];
+        let q = null;
+        for (let o = 0; o < order.length && !q; o++) q = pool.filter(function (x) { return !used[x.id] && order[o](x); })[0] || null;
+        if (!q) break;
+        used[q.id] = true;
+        chosen.push(q);
       }
     });
+    // If a topic ran short, fill from the other topics.
+    if (chosen.length < size) {
+      const names = topics.map(function (t) { return t.name; });
+      const rest = shuffled(bank.filter(function (q) { return !used[q.id] && names.indexOf(q.topic) >= 0; }));
+      rest.sort(function (a, b) { return (allowed(b) ? 1 : 0) - (allowed(a) ? 1 : 0); });
+      rest.slice(0, size - chosen.length).forEach(function (q) { chosen.push(q); });
+    }
+    if (!chosen.length) throw fail('not_ready', mode === 'full' ? 'Questions for this event are still being written. Try a quick drill, which writes new ones on the spot.' : 'No questions are ready for this event yet. Try again in a few minutes.');
   }
-
-  let chosen = [];
-  const used = {};
-  Object.keys(plan).forEach(function (name) {
-    const seen = stats[name] ? stats[name].seen : {};
-    const pool = shuffled(bank.filter(function (q) { return q.topic === name; }));
-    const ordered = pool.filter(function (q) { return !seen[q.id]; }).concat(pool.filter(function (q) { return seen[q.id]; }));
-    ordered.slice(0, plan[name]).forEach(function (q) { chosen.push(q); used[q.id] = true; });
-  });
-  // If a topic ran short, fill from the other topics.
-  if (chosen.length < size) {
-    const names = topics.map(function (t) { return t.name; });
-    shuffled(bank.filter(function (q) { return !used[q.id] && names.indexOf(q.topic) >= 0; }))
-      .slice(0, size - chosen.length).forEach(function (q) { chosen.push(q); });
-  }
-  if (!chosen.length) throw fail('not_ready', mode === 'full' ? 'Questions for this event are still being written. Try a quick drill, which writes new ones on the spot.' : 'No questions are ready for this event yet. Try again in a few minutes.');
   chosen = shuffled(chosen);
 
   const sessionId = 's' + Utilities.getUuid().replace(/-/g, '').slice(0, 14);
   const timeLimit = mode === 'full' ? Math.round((num('FULL_TEST_MINUTES', 50) * 60 * chosen.length) / num('FULL_TEST_SIZE', 100)) : null;
   CacheService.getScriptCache().put('sess_' + sessionId, JSON.stringify({
-    email: user.email, eventId: ev.id, eventName: ev.name, mode: mode,
+    email: user.email, eventId: ev.id, eventName: ev.name, mode: mode, level: level,
     qids: chosen.map(function (q) { return q.id; }), started: nowIso(),
   }), 21600);
 
   return {
-    sessionId: sessionId, mode: mode, eventId: ev.id, eventName: ev.name, timeLimit: timeLimit, generated: generated,
+    sessionId: sessionId, mode: mode, level: level, eventId: ev.id, eventName: ev.name, timeLimit: timeLimit, generated: generated,
     questions: chosen.map(function (q) {
-      const base = { id: q.id, topic: q.topic, stem: q.stem, choices: q.choices };
+      const base = { id: q.id, topic: q.topic, stem: q.stem, choices: q.choices, difficulty: diffOf(q) };
       if (mode !== 'full') { base.answer = q.answer; base.explanation = q.explanation; }
       return base;
     }),
   };
+}
+function pickDifficulty(mix) {
+  let r = Math.random();
+  const keys = Object.keys(mix);
+  for (let i = 0; i < keys.length; i++) { r -= mix[keys[i]]; if (r <= 0) return keys[i]; }
+  return keys[keys.length - 1];
+}
+/** The difficulty this level uses that the topic has fewest questions of, relative to how much the level uses it. */
+function neediestDifficulty(bank, topicName, mix) {
+  let best = null, bestScore = Infinity;
+  Object.keys(mix).forEach(function (d) {
+    const n = bank.filter(function (q) { return q.topic === topicName && diffOf(q) === d; }).length;
+    const score = n / mix[d];
+    if (score < bestScore) { bestScore = score; best = d; }
+  });
+  return best || 'medium';
 }
 
 function submitSession(user, sessionId, answers, seconds) {
@@ -468,16 +560,18 @@ function submitSession(user, sessionId, answers, seconds) {
     const q = byId[d.q];
     const ok = d.c === q.answer;
     if (ok) correct++;
-    const t = perTopic[q.topic] || (perTopic[q.topic] = { attempts: 0, correct: 0, ids: [] });
+    const t = perTopic[q.topic] || (perTopic[q.topic] = { attempts: 0, correct: 0, ids: [], wrong: [], right: [] });
     t.attempts++;
     if (ok) t.correct++;
     t.ids.push(q.id);
+    (ok ? t.right : t.wrong).push(q.id);
   });
   const total = detail.length;
   const row = {
     id: sessionId, email: user.email, eventId: s.eventId, eventName: s.eventName, mode: s.mode,
     total: total, correct: correct, pct: total ? Math.round((correct / total) * 100) : 0,
     seconds: Math.max(0, Math.round(seconds)), started: s.started, submitted: nowIso(), detail: JSON.stringify(detail),
+    level: levelOf(s.level),
   };
 
   withLock(function () {
@@ -486,11 +580,13 @@ function submitSession(user, sessionId, answers, seconds) {
       const t = perTopic[topic];
       const ex = stats.filter(function (r) { return r.email === user.email && r.eventId === s.eventId && r.topic === topic; })[0];
       const seen = jsonArr(ex && ex.seen).filter(function (id) { return t.ids.indexOf(id) < 0; }).concat(t.ids).slice(-300);
+      // Wrong answers go on the review list; a later right answer takes them off.
+      const missed = jsonArr(ex && ex.missed).filter(function (id) { return t.right.indexOf(id) < 0 && t.wrong.indexOf(id) < 0; }).concat(t.wrong).slice(-200);
       const obj = {
         email: user.email, eventId: s.eventId, topic: topic,
         attempts: (ex ? Number(ex.attempts) || 0 : 0) + t.attempts,
         correct: (ex ? Number(ex.correct) || 0 : 0) + t.correct,
-        seen: JSON.stringify(seen), updated: nowIso(),
+        seen: JSON.stringify(seen), updated: nowIso(), missed: JSON.stringify(missed),
       };
       if (ex) writeRow('Stats', ex._row, obj); else appendRows('Stats', [obj]);
     });
@@ -518,7 +614,7 @@ function buildResults(row) {
   }).filter(function (t) { return t.total > 0; });
   const correct = review.filter(function (r) { return r.correct; }).length;
   return {
-    sessionId: String(row.id), eventId: String(row.eventId), eventName: String(row.eventName), mode: String(row.mode),
+    sessionId: String(row.id), eventId: String(row.eventId), eventName: String(row.eventName), mode: String(row.mode), level: levelOf(row.level),
     total: review.length, correct: correct, pct: review.length ? Math.round((correct / review.length) * 100) : 0,
     seconds: Number(row.seconds) || 0, submitted: String(row.submitted), byTopic: byTopic, review: review,
   };
@@ -599,7 +695,7 @@ function parseJsonLoose(s) {
 }
 
 /** Has the AI write questions for one topic, checks them, and saves the good ones. Returns the saved rows. */
-function generateQuestions(ev, topicName, count) {
+function generateQuestions(ev, topicName, count, difficulty) {
   const topic = ev.topics.filter(function (t) { return t.name === topicName; })[0] || { name: topicName, weight: 0, objectives: '' };
   const existing = readQuestions(ev.id).filter(function (q) { return q.topic === topicName; });
   const avoid = existing.slice(-40).map(function (q) { return '- ' + q.stem.slice(0, 160); }).join('\n');
@@ -610,6 +706,7 @@ function generateQuestions(ev, topicName, count) {
     'Write ' + n + ' multiple-choice questions for this topic on the event’s objective test: "' + topic.name + '".',
     topic.objectives ? 'What this topic covers: ' + topic.objectives : '',
     'Match the style of FBLA objective tests: clear, professional, and at a high school level. Mix definitions, short real-world scenarios, and calculations where they fit the topic.',
+    difficulty ? 'Difficulty for every question in this set: ' + DIFFICULTY_GUIDE[difficulty] : 'Mix easy, medium, and hard questions.',
     'Rules:',
     '- Exactly 4 answer choices. Exactly one is correct. The other three are believable but clearly wrong to someone who knows the material.',
     '- Never use "all of the above", "none of the above", or "both A and B". Don’t put letters in front of the choices.',
@@ -658,7 +755,7 @@ function generateQuestions(ev, topicName, count) {
     rows.push({
       id: 'q' + Utilities.getUuid().replace(/-/g, '').slice(0, 12),
       eventId: ev.id, topic: topic.name,
-      difficulty: ['easy', 'medium', 'hard'].indexOf(it.difficulty) >= 0 ? it.difficulty : 'medium',
+      difficulty: difficulty || (['easy', 'medium', 'hard'].indexOf(it.difficulty) >= 0 ? it.difficulty : 'medium'),
       stem: stem,
       choices: JSON.stringify(order.map(function (o) { return choices[o]; })),
       answer: order.indexOf(answer),
@@ -668,6 +765,64 @@ function generateQuestions(ev, topicName, count) {
   });
   if (rows.length) withLock(function () { appendRows('Questions', rows); });
   return rows;
+}
+
+/* ====================== Study guides ====================== */
+
+/** A short study guide for one knowledge area, written by the AI once and shared by every member. */
+function studyNotes(user, eventId, topicName, regenerate) {
+  const ev = readEvents().filter(function (e) { return e.id === eventId; })[0];
+  if (!ev) throw fail('not_found', 'That event isn’t available.');
+  const topic = ev.topics.filter(function (t) { return t.name === topicName; })[0];
+  if (!topic) throw fail('not_found', 'That topic isn’t part of this event.');
+  const ex = readAll('Notes').filter(function (r) { return r.eventId === eventId && r.topic === topicName; })[0];
+  if (ex && String(ex.content) && !(regenerate && user.admin)) return { content: String(ex.content), updated: String(ex.updated) };
+
+  const prompt = [
+    'Write a study guide for high school students preparing for the FBLA (Future Business Leaders of America) 2026–27 "' + ev.name + '" objective test.',
+    'Cover this knowledge area from the test: "' + topic.name + '".',
+    topic.objectives ? 'What the official guidelines say it covers: ' + topic.objectives : '',
+    'Use exactly these sections, as "## " headings: "Key ideas" (6 to 10 bullets, one sentence each), "Terms to know" (bullets written as "**Term**: definition"),',
+    '"Example" (one short worked example or business scenario with its answer, when one fits the topic), and "Test traps" (3 to 5 bullets on common mistakes and look-alike answer choices).',
+    'Use only "## " headings, "- " bullets, and **bold**. Keep it under 500 words. Stick to well-established facts and skip anything that changes from year to year.',
+    'Return JSON: {"content": "<the study guide>"}.',
+  ].filter(String).join('\n');
+  const out = gemini(prompt, { type: 'OBJECT', properties: { content: { type: 'STRING' } }, required: ['content'] }, 0.4);
+  const content = String((out && out.content) || '').trim().slice(0, 12000);
+  if (!content) throw fail('ai', 'The AI didn’t write the study guide. Try again.');
+  const updated = nowIso();
+  withLock(function () {
+    const fresh = readAll('Notes').filter(function (r) { return r.eventId === eventId && r.topic === topicName; })[0];
+    const obj = { eventId: eventId, topic: topicName, content: content, updated: updated, source: prop('GEMINI_MODEL', DEFAULT_MODEL) };
+    if (fresh) writeRow('Notes', fresh._row, obj); else appendRows('Notes', [obj]);
+  });
+  return { content: content, updated: updated };
+}
+
+/* ====================== Chapter readiness (officers) ====================== */
+
+/** Chapter-wide totals per event, with no member names: who's practicing, accuracy, and full-test scores by level. */
+function adminReadiness() {
+  const events = readEvents();
+  const stats = readAll('Stats', 5);
+  const sessions = readAll('Sessions', 11);
+  const levels = readColumn('Sessions', 'level');
+  sessions.forEach(function (r, i) { r.level = levelOf(levels[i]); });
+  return events.map(function (e) {
+    const st = stats.filter(function (r) { return r.eventId === e.id && Number(r.attempts) > 0; });
+    const people = {};
+    st.forEach(function (r) { people[r.email] = true; });
+    const attempts = st.reduce(function (n, r) { return n + (Number(r.attempts) || 0); }, 0);
+    const correct = st.reduce(function (n, r) { return n + (Number(r.correct) || 0); }, 0);
+    const byLevel = {};
+    Object.keys(LEVELS).forEach(function (l) {
+      const full = sessions.filter(function (r) { return r.eventId === e.id && r.mode === 'full' && r.level === l; });
+      byLevel[l] = full.length
+        ? { tests: full.length, avg: Math.round(full.reduce(function (n, r) { return n + (Number(r.pct) || 0); }, 0) / full.length), best: Math.max.apply(null, full.map(function (r) { return Number(r.pct) || 0; })) }
+        : { tests: 0, avg: null, best: null };
+    });
+    return { eventId: e.id, eventName: e.name, category: e.category, members: Object.keys(people).length, answered: attempts, accuracy: attempts ? Math.round((correct / attempts) * 100) : null, byLevel: byLevel };
+  }).sort(function (a, b) { return b.members - a.members || b.answered - a.answered || a.eventName.localeCompare(b.eventName); });
 }
 
 /* ====================== Officer tools ====================== */
@@ -792,7 +947,8 @@ function adminGenerate(eventId, topic, count) {
   const ev = readEvents().filter(function (e) { return e.id === eventId; })[0];
   if (!ev) throw fail('not_found', 'That event isn’t available.');
   if (!ev.topics.some(function (t) { return t.name === topic; })) throw fail('not_found', 'Save the event’s topics first.');
-  return { added: generateQuestions(ev, topic, count).length };
+  const bank = readQuestions(ev.id).filter(function (q) { return q.status === 'active'; });
+  return { added: generateQuestions(ev, topic, count, neediestDifficulty(bank, topic, { easy: 1, medium: 1, hard: 1 })).length };
 }
 
 function setQuestionStatus(id, status) {
@@ -1014,17 +1170,20 @@ function topUpBanks() {
   for (let i = 0; i < batches && Date.now() - started < 4 * 60 * 1000; i++) {
     const events = readEvents();
     const qs = readAll('Questions', 10).filter(function (r) { return r.status === 'active'; });
+    const per = Math.ceil(target / 3); // a third of each topic's target at each difficulty
     let best = null;
     events.forEach(function (e) {
       e.topics.forEach(function (t) {
-        const n = qs.filter(function (q) { return q.eventId === e.id && q.topic === t.name; }).length;
-        if (n < target && (!best || n < best.n)) best = { e: e, t: t, n: n };
+        ['easy', 'medium', 'hard'].forEach(function (d) {
+          const n = qs.filter(function (q) { return q.eventId === e.id && q.topic === t.name && diffOf(q) === d; }).length;
+          if (n < per && (!best || n < best.n)) best = { e: e, t: t, d: d, n: n };
+        });
       });
     });
     if (!best) return;
     try {
-      const rows = generateQuestions(best.e, best.t.name, Math.min(10, target - best.n));
-      console.log('Wrote ' + rows.length + ' for ' + best.e.name + ' / ' + best.t.name);
+      const rows = generateQuestions(best.e, best.t.name, Math.min(10, per - best.n), best.d);
+      console.log('Wrote ' + rows.length + ' ' + best.d + ' for ' + best.e.name + ' / ' + best.t.name);
     } catch (err) {
       console.warn('Top-up paused: ' + err.message);
       return;

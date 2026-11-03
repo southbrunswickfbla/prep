@@ -97,8 +97,9 @@ Add a link to `https://southbrunswickfbla.github.io/prep/` in the chapter site's
 |---|---|
 | Events | Event names, career clusters, topics and weights |
 | Questions | Every AI-written question, its answer and explanation, reports, and status |
-| Stats | Each member's attempts and correct answers per topic |
-| Sessions | Each finished drill or test and its answers |
+| Stats | Each member's attempts, correct answers, and missed questions per topic |
+| Sessions | Each finished drill or test, its level, and its answers |
+| Notes | The AI study guide for each topic, written once and shared |
 | Users | Each member's school email, name, and last visit |
 | Flags | Every report, with who sent it and why |
 
