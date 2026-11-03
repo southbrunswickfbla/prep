@@ -3,7 +3,7 @@
  * so the site can be previewed before the Apps Script backend is connected.
  * It follows the same rules as the real backend (Code.gs).
  */
-import type { AdminOverview, Best, Dashboard, EventSummary, Level, Mode, Question, Results, SessionRow, StartRes, StudyNotes, Topic } from '../types';
+import type { AdminOverview, Best, Dashboard, EventSummary, JudgeEvent, JudgeEventDetail, Level, Mode, PresentResult, Question, Results, SessionRow, StartRes, StudyNotes, Topic } from '../types';
 
 type Q = { id: string; eventId: string; topic: string; stem: string; choices: string[]; answer: number; explanation: string };
 type Ev = { id: string; name: string; category: string; topics: Topic[] };
@@ -203,9 +203,55 @@ export async function demoCall(action: string, p: Record<string, unknown>): Prom
       return { content, updated: new Date().toISOString() } satisfies StudyNotes;
     }
     case 'readiness': return [];
+    case 'presentEvents': return JUDGE.map((j) => judgeSummary(j));
+    case 'presentEvent': {
+      const j = JUDGE.find((x) => x.id === p.eventId);
+      if (!j) throw new Error('That event isn’t available.');
+      const history = loadPresent().filter((r) => r.eventId === j.id).reverse().map((r) => ({ id: r.id, title: r.title, submitted: r.submitted, pct: r.pct, score: r.score, max: r.max, seconds: r.seconds }));
+      return { ...judgeSummary(j), criteria: j.criteria, history } satisfies JudgeEventDetail;
+    }
+    case 'practicePrompt': return { prompt: /interview/.test(String(p.eventId)) ? 'Front desk assistant, Brunswick Community Center. Greet visitors, answer phones, schedule rooms, and keep records. Looking for someone organized, friendly, and comfortable with spreadsheets.' : 'Should every high school student be required to take a personal finance class?' };
+    case 'slidesText': return { text: 'Demo slides', words: 2 };
+    case 'transcribe': return { text: 'Um, good morning judges. Today I will talk about why every student should learn personal finance. First, most teens will open a bank account and get a credit card within a few years, uh, so they need to understand interest and credit scores. Second, budgeting skills help students avoid debt. For example, a student who saves fifty dollars a month will have six hundred dollars by the end of the year. Finally, you know, schools already teach math, so adding real-world money skills is a simple step. Thank you.', duration: 48, words: 92, wpm: 115, fillers: 3, pauses: 1 };
+    case 'judgeQuestions': return { questions: ['How would you fit a finance class into an already full schedule?', 'What would you say to someone who thinks parents should teach money skills?'], secondsEach: 60 };
+    case 'judgePresentation': {
+      const j = JUDGE.find((x) => x.id === p.eventId)!;
+      const criteria = j.criteria.map((c, i) => ({ name: c.name, max: c.points, judged: i !== j.criteria.length - 1, points: i !== j.criteria.length - 1 ? Math.round(c.points * (0.55 + 0.1 * (i % 3))) : null, evidence: i === 0 ? 'Today I will talk about why every student should learn personal finance.' : 'a student who saves fifty dollars a month', feedback: 'Demo feedback: add one specific statistic and say why it matters to the judges.' }));
+      const judged = criteria.filter((c) => c.judged);
+      const score = judged.reduce((n, c) => n + (c.points || 0), 0), max = judged.reduce((n, c) => n + c.max, 0);
+      const res: PresentResult = {
+        id: 'dp' + Date.now().toString(36), eventId: j.id, eventName: j.name, title: String(p.title || ''), submitted: new Date().toISOString(),
+        seconds: Number(p.seconds) || 0, limitSeconds: j.presentMin * 60, words: 92, wpm: Number(p.wpm) || 0, fillers: Number(p.fillers) || 0, pauses: Number(p.pauses) || 0,
+        score, max, pct: max ? Math.round((score / max) * 100) : 0, criteria,
+        strengths: ['Clear three-part structure', 'Concrete savings example'], improvements: ['Open with a stronger hook', 'Cite one real statistic', 'Slow down your conclusion'],
+        summary: 'Demo mode: this is a sample score. Connect the backend to have the AI judge your real presentation.', qa: (p.qa as { q: string; a: string }[]) || [], mode: p.mode === 'typed' ? 'typed' : 'voice', prompt: String(p.prompt || ''), transcript: String(p.transcript || ''),
+      };
+      savePresent([...loadPresent(), res]);
+      return res;
+    }
+    case 'presentResult': { const r = loadPresent().find((x) => x.id === p.id); if (!r) throw new Error('Those results aren’t available.'); return r; }
     case 'adminOverview':
       return { events: EVENTS.map(summary), flagged: [], target: 30, aiReady: false, model: 'Demo mode' } satisfies AdminOverview;
     default:
       throw new Error('Demo mode can’t do that. Connect the backend to use the admin tools.');
   }
+}
+
+/* ---------- Presentation judge (demo) ---------- */
+type DemoJudge = Omit<JudgeEvent, 'attempts' | 'best' | 'last'> & { criteria: { name: string; points: number; description: string }[] };
+const JUDGE: DemoJudge[] = [
+  { id: 'public-speaking', name: 'Public Speaking', category: 'Speaking and interview events', guide: '', ready: true, presentMin: 5, qaMin: 0, prepMin: 0, format: 'A prepared speech on a business topic, delivered to judges.', note: '',
+    criteria: [{ name: 'Introduction grabs attention', points: 10, description: 'Opens with a hook and states the topic.' }, { name: 'Organization and flow', points: 20, description: 'Clear points with smooth transitions.' }, { name: 'Supporting evidence', points: 20, description: 'Facts and examples back up each point.' }, { name: 'Conclusion', points: 10, description: 'Sums up and ends strongly.' }, { name: 'Voice and delivery', points: 20, description: 'Clear, confident, and well paced.' }, { name: 'Eye contact and poise', points: 10, description: 'Engages the judges with eye contact and posture.' }] },
+  { id: 'impromptu-speaking', name: 'Impromptu Speaking', category: 'Speaking and interview events', guide: '', ready: true, presentMin: 4, qaMin: 0, prepMin: 1, format: 'A speech on a topic given ten minutes before, with brief prep time.', note: '',
+    criteria: [{ name: 'Addresses the topic', points: 20, description: 'Stays on the assigned topic.' }, { name: 'Organization', points: 20, description: 'Clear opening, body, and close.' }, { name: 'Support', points: 20, description: 'Gives reasons and examples.' }, { name: 'Delivery', points: 20, description: 'Confident and clear.' }, { name: 'Body language', points: 10, description: 'Gestures and eye contact.' }] },
+  { id: 'business-plan', name: 'Business Plan', category: 'Presentation events', guide: '', ready: true, presentMin: 7, qaMin: 3, prepMin: 0, format: 'A business plan presented to judges acting as investors.', note: '',
+    criteria: [{ name: 'Executive summary', points: 10, description: 'States the business, need, and ask.' }, { name: 'Market analysis', points: 15, description: 'Target market supported by data.' }, { name: 'Financial plan', points: 15, description: 'Realistic revenue and costs.' }, { name: 'Answers judges’ questions', points: 10, description: 'Clear, confident answers.' }, { name: 'Professional appearance', points: 5, description: 'Dress and presence.' }] },
+];
+const PKEY = 'fblaprep.demo.present';
+function loadPresent(): PresentResult[] { try { return JSON.parse(localStorage.getItem(PKEY) || '[]') as PresentResult[]; } catch { return []; } }
+function savePresent(r: PresentResult[]) { try { localStorage.setItem(PKEY, JSON.stringify(r.slice(-30))); } catch { /* ignore */ } }
+function judgeSummary(j: DemoJudge): JudgeEvent {
+  const mine = loadPresent().filter((r) => r.eventId === j.id);
+  const { criteria: _c, ...rest } = j;
+  return { ...rest, attempts: mine.length, best: mine.length ? Math.max(...mine.map((r) => r.pct)) : null, last: mine.length ? mine[mine.length - 1].pct : null };
 }

@@ -8,6 +8,7 @@ import { Session } from './pages/Session';
 import { Progress, Results } from './pages/Results';
 import { Admin } from './pages/Admin';
 import { Study } from './pages/Study';
+import { PresentEvent, PresentList, PresentResultPage } from './pages/Present';
 
 function NotFound() {
   return (
@@ -42,6 +43,9 @@ function Shell() {
           <Route path="session" element={<Session />} />
           <Route path="results/:sessionId" element={<Results />} />
           <Route path="progress" element={<Progress />} />
+          <Route path="present" element={<PresentList />} />
+          <Route path="present/result/:id" element={<PresentResultPage />} />
+          <Route path="present/:eventId" element={<PresentEvent />} />
           <Route path="admin" element={<Admin />} />
           <Route path="*" element={<NotFound />} />
         </Route>

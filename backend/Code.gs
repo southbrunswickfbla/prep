@@ -1,5 +1,5 @@
 /**
- * SBHS FBLA Prep — backend (Google Apps Script), v2.2
+ * SBHS FBLA Prep — backend (Google Apps Script), v3
  *
  * Paste this into the Apps Script project attached to the "FBLA Prep Data" Google Sheet,
  * save, then run setup() once. Full steps are in SETUP.md.
@@ -34,7 +34,7 @@
  *  AI_MIN_GAP_MS        default 6000. Minimum time between AI calls, to stay under the free per-minute limit.
  */
 
-const VERSION = 'v2.2';
+const VERSION = 'v3';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 
 const TABS = {
@@ -45,6 +45,8 @@ const TABS = {
   Users:     ['email', 'name', 'firstSeen', 'lastSeen', 'sessions'],
   Flags:     ['time', 'email', 'questionId', 'reason'],
   Notes:     ['eventId', 'topic', 'content', 'updated', 'source'],
+  Judging:   ['id', 'name', 'category', 'guide', 'rubric', 'presentMin', 'qaMin', 'prepMin', 'format', 'note', 'updated', 'active'],
+  Presentations: ['id', 'email', 'eventId', 'eventName', 'title', 'submitted', 'seconds', 'words', 'wpm', 'fillers', 'pauses', 'score', 'max', 'pct', 'detail', 'transcript'],
 };
 
 /*
@@ -99,6 +101,14 @@ function route(action, b, user) {
     case 'submit': return submitSession(user, String(b.sessionId || ''), b.answers || {}, Number(b.seconds) || 0);
     case 'results': return sessionResults(user, String(b.sessionId || ''));
     case 'flag': return flagQuestion(user, String(b.questionId || ''), String(b.reason || '').slice(0, 200));
+    case 'presentEvents': return presentEvents(user);
+    case 'presentEvent': return presentEvent(user, String(b.eventId || ''));
+    case 'practicePrompt': return practicePrompt(String(b.eventId || ''));
+    case 'slidesText': return slidesText(String(b.pdf || ''));
+    case 'transcribe': return transcribe(String(b.audio || ''), String(b.mime || 'audio/webm'));
+    case 'judgeQuestions': return judgeQuestions(String(b.eventId || ''), String(b.title || ''), String(b.transcript || ''), String(b.slides || ''), String(b.prompt || ''));
+    case 'judgePresentation': return judgePresentation(user, b);
+    case 'presentResult': return presentResult(user, String(b.id || ''));
   }
   if (!user.admin) throw fail('forbidden', 'Only officers can do that.');
   switch (action) {
@@ -112,6 +122,8 @@ function route(action, b, user) {
     case 'loadFbla': return adminLoadFbla(Array.isArray(b.skip) ? b.skip.map(String) : []);
     case 'reloadTopics': return adminReloadTopics(String(b.eventId || ''));
     case 'readiness': return adminReadiness();
+    case 'loadJudging': return adminLoadJudging(Array.isArray(b.skip) ? b.skip.map(String) : []);
+    case 'reloadRubric': return adminReloadRubric(String(b.eventId || ''));
   }
   throw fail('bad_request', 'Unknown action.');
 }
@@ -1410,6 +1422,364 @@ function adminReloadTopics(eventId) {
   return { topics: r.topics, note: r.note };
 }
 
+/* ====================== Presentation judge ====================== */
+
+/* Every 2026–27 presentation event, plus the two chapter events that are presented to judges. */
+const PRESENT_EVENTS = [
+  ['Broadcast Journalism', 'Presentation events', 'Presentation%20Events/Broadcast-Journalism.pdf'],
+  ['Business Ethics', 'Presentation events', 'Presentation%20Events/Business-Ethics.pdf'],
+  ['Business Plan', 'Presentation events', 'Presentation%20Events/Business-Plan.pdf'],
+  ['Career Portfolio', 'Presentation events', 'Presentation%20Events/Career-Portfolio.pdf'],
+  ['Coding & Programming', 'Presentation events', 'Presentation%20Events/Coding-and-Programming.pdf'],
+  ['Computer Game & Simulation Programming', 'Presentation events', 'Presentation%20Events/Computer-Game-Simulation-Programming.pdf'],
+  ['Data Analysis', 'Presentation events', 'Presentation%20Events/Data-Analysis.pdf'],
+  ['Digital Animation', 'Presentation events', 'Presentation%20Events/Digital-Animation.pdf'],
+  ['Digital Video Production', 'Presentation events', 'Presentation%20Events/Digital-Video-Production.pdf'],
+  ['Event Planning', 'Presentation events', 'Presentation%20Events/Event-Planning.pdf'],
+  ['Financial Planning', 'Presentation events', 'Presentation%20Events/Financial-Planning.pdf'],
+  ['Financial Statement Analysis', 'Presentation events', 'Presentation%20Events/Financial-Statement-Analysis.pdf'],
+  ['Future Business Educator', 'Presentation events', 'Presentation%20Events/Future-Business-Educator.pdf'],
+  ['Future Business Leader', 'Presentation events', 'Presentation%20Events/Future-Business-Leader.pdf'],
+  ['Graphic Design', 'Presentation events', 'Presentation%20Events/Graphic-Design.pdf'],
+  ['Impromptu Speaking', 'Speaking and interview events', 'Presentation%20Events/Impromptu-Speaking.pdf'],
+  ['Job Interview', 'Speaking and interview events', 'Presentation%20Events/Job-Interview.pdf'],
+  ['Mobile Application Development', 'Presentation events', 'Presentation%20Events/Mobile-Application-Development.pdf'],
+  ['Public Service Announcement', 'Presentation events', 'Presentation%20Events/Public-Service-Announcement.pdf'],
+  ['Public Speaking', 'Speaking and interview events', 'Presentation%20Events/Public-Speaking.pdf'],
+  ['Sales Presentation', 'Presentation events', 'Presentation%20Events/Sales-Presentation.pdf'],
+  ['Social Media Strategies', 'Presentation events', 'Presentation%20Events/Social-Media-Strategies.pdf'],
+  ['Supply Chain Management', 'Presentation events', 'Presentation%20Events/Supply-Chain-Management.pdf'],
+  ['Visual Design', 'Presentation events', 'Presentation%20Events/Visual-Design.pdf'],
+  ['Website Coding & Development', 'Presentation events', 'Presentation%20Events/Website-Coding-and-Development.pdf'],
+  ['Website Design', 'Presentation events', 'Presentation%20Events/Website-Design.pdf'],
+  ['Introduction to Business Presentation', '9th & 10th grade presentations', 'Presentation%20Events/Introduction-to-Business-Presentation.pdf'],
+  ['Introduction to Programming', '9th & 10th grade presentations', 'Presentation%20Events/Introduction-to-Programming.pdf'],
+  ['Introduction to Public Speaking', '9th & 10th grade presentations', 'Presentation%20Events/Introduction-to-Public-Speaking.pdf'],
+  ['Introduction to Social Media Strategy', '9th & 10th grade presentations', 'Presentation%20Events/Introduction-to-Social-Media-Strategy.pdf'],
+  ['Community Service Project', 'Chapter events', 'Chapter%20Events/Community-Service-Project.pdf'],
+  ['Local Chapter Annual Business Report', 'Chapter events', 'Chapter%20Events/Local-Chapter-Annual-Business-Report.pdf'],
+];
+
+function readJudging() {
+  return readAll('Judging').filter(function (r) { return r.id && String(r.active).toUpperCase() !== 'FALSE'; }).map(function (r) {
+    return {
+      id: String(r.id), name: String(r.name), category: String(r.category || ''), guide: String(r.guide || ''),
+      criteria: jsonArr(r.rubric).filter(function (c) { return c && c.name; }).map(function (c) { return { name: String(c.name), points: Number(c.points) || 0, description: String(c.description || '') }; }),
+      presentMin: Number(r.presentMin) || 0, qaMin: Number(r.qaMin) || 0, prepMin: Number(r.prepMin) || 0,
+      format: String(r.format || ''), note: String(r.note || ''), _row: r._row,
+    };
+  });
+}
+function judgingRow(j, changes) {
+  const o = { id: j.id, name: j.name, category: j.category, guide: j.guide, rubric: JSON.stringify(j.criteria || []), presentMin: j.presentMin || '', qaMin: j.qaMin || 0, prepMin: j.prepMin || 0, format: j.format || '', note: j.note || '', updated: nowIso(), active: true };
+  Object.keys(changes || {}).forEach(function (k) { o[k] = changes[k]; });
+  return o;
+}
+
+function seedJudging() {
+  return withLock(function () {
+    const have = {};
+    readAll('Judging').forEach(function (r) { have[norm(r.name)] = true; });
+    const rows = PRESENT_EVENTS.filter(function (p) { return !have[norm(p[0])]; }).map(function (p) {
+      return { id: slug(p[0]), name: p[0], category: p[1], guide: GUIDE_BASE + p[2], rubric: '[]', presentMin: '', qaMin: 0, prepMin: 0, format: '', note: '', updated: nowIso(), active: true };
+    });
+    appendRows('Judging', rows);
+    return { added: rows.length };
+  });
+}
+
+/** Reads an event's guidelines and saves its presentation rating sheet, time limits, and format. */
+function loadRubric(j) {
+  let blob;
+  try { blob = fetchGuidePdf(j.guide); }
+  catch (err) { saveJudgingNote(j, 'Couldn’t download the guidelines. Check the link, then try again.'); throw err; }
+  let text = '';
+  try { text = pdfToText(blob, j.name); }
+  catch (err) { if (err.appCode === 'no_drive') throw fail('setup', 'Turn on the Drive API service in Apps Script (Services + → Drive API → Add).'); throw err; }
+  // Send the start (event format and times) and the rating sheet, not the whole document.
+  const at = text.search(/(Presentation|Performance|Interview|Speech|Delivery)?\s*Rating Sheet/i);
+  const part = at > 0 ? text.slice(0, 4000) + '\n...\n' + text.slice(Math.max(0, at - 200), at + 9000) : text.slice(0, 13000);
+  const prompt = [
+    'Below is text from the official FBLA (Future Business Leaders of America) 2026–27 competitive event guidelines for "' + j.name + '".',
+    'Find the part of the event that competitors perform live for judges (a presentation, speech, or interview) and its rating sheet. Return:',
+    '- presentMinutes: the longest the presentation, speech, or interview may run, in minutes.',
+    '- qaMinutes: minutes of judge questions after it (0 if there are none or they are included in presentMinutes).',
+    '- prepMinutes: preparation time given at the event right before presenting (0 if none).',
+    '- format: one sentence describing what competitors present and to whom.',
+    '- criteria: each line of the live presentation’s rating sheet, named as written, with its maximum points and a one-sentence description in your own words of what earns full points. Leave out penalty lines and lines that score a written report or prejudged submission.',
+    '\nGuidelines:\n"""\n' + part + '\n"""',
+  ].join('\n');
+  const schema = {
+    type: 'OBJECT',
+    properties: {
+      presentMinutes: { type: 'NUMBER' }, qaMinutes: { type: 'NUMBER' }, prepMinutes: { type: 'NUMBER' }, format: { type: 'STRING' },
+      criteria: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, points: { type: 'INTEGER' }, description: { type: 'STRING' } }, required: ['name', 'points', 'description'] } },
+    },
+    required: ['presentMinutes', 'qaMinutes', 'prepMinutes', 'format', 'criteria'],
+  };
+  const out = aiCall(prompt, schema, 0);
+  const seen = {};
+  const criteria = (out && Array.isArray(out.criteria) ? out.criteria : []).map(function (c) {
+    return { name: String(c.name || '').trim().slice(0, 140), points: Math.max(0, Math.min(100, Math.round(Number(c.points) || 0))), description: String(c.description || '').trim().slice(0, 400) };
+  }).filter(function (c) { const k = norm(c.name); if (!c.name || !c.points || seen[k]) return false; seen[k] = true; return true; }).slice(0, 30);
+  if (criteria.length < 2) {
+    saveJudgingNote(j, 'Couldn’t find a rating sheet in the guidelines.');
+    throw fail('guide', 'No rating sheet was found in the guidelines for ' + j.name + '.');
+  }
+  const clamp = function (v, lo, hi, d) { const n = Number(v); return isFinite(n) && n >= lo && n <= hi ? Math.round(n * 2) / 2 : d; };
+  const total = criteria.reduce(function (n, c) { return n + c.points; }, 0);
+  const fresh = {
+    criteria: criteria, presentMin: clamp(out.presentMinutes, 1, 30, 7), qaMin: clamp(out.qaMinutes, 0, 15, 0), prepMin: clamp(out.prepMinutes, 0, 60, 0),
+    format: String(out.format || '').slice(0, 300), note: 'Loaded from the 2026–27 guidelines. The rating sheet is worth ' + total + ' points.',
+  };
+  withLock(function () {
+    const row = readJudging().filter(function (x) { return x.id === j.id; })[0] || j;
+    writeRow('Judging', row._row, judgingRow(row, { rubric: JSON.stringify(fresh.criteria), presentMin: fresh.presentMin, qaMin: fresh.qaMin, prepMin: fresh.prepMin, format: fresh.format, note: fresh.note }));
+  });
+  return Object.assign({}, j, fresh);
+}
+function saveJudgingNote(j, note) {
+  try { withLock(function () { const row = readJudging().filter(function (x) { return x.id === j.id; })[0]; if (row) writeRow('Judging', row._row, judgingRow(row, { note: note })); }); } catch (_) { /* fine */ }
+}
+
+function attemptsFor(email) {
+  return readAll('Presentations', 14).filter(function (r) { return r.email === email; });
+}
+function judgeSummary(j, mine) {
+  const rows = mine.filter(function (r) { return r.eventId === j.id; }).sort(function (a, b) { return String(b.submitted).localeCompare(String(a.submitted)); });
+  return {
+    id: j.id, name: j.name, category: j.category, guide: j.guide, ready: j.criteria.length > 0,
+    presentMin: j.presentMin, qaMin: j.qaMin, prepMin: j.prepMin, format: j.format, note: j.note,
+    attempts: rows.length, best: rows.length ? Math.max.apply(null, rows.map(function (r) { return Number(r.pct) || 0; })) : null,
+    last: rows.length ? Number(rows[0].pct) || 0 : null,
+  };
+}
+
+function presentEvents(user) {
+  const mine = attemptsFor(user.email);
+  return readJudging().map(function (j) { return judgeSummary(j, mine); });
+}
+
+function presentEvent(user, eventId) {
+  let j = readJudging().filter(function (x) { return x.id === eventId; })[0];
+  if (!j) throw fail('not_found', 'That event isn’t available.');
+  if (!j.criteria.length && j.guide && aiProvider()) {
+    try { j = loadRubric(j); } catch (err) { if (err.appCode === 'setup') throw err; /* show the event anyway */ }
+  }
+  const mine = attemptsFor(user.email);
+  const history = mine.filter(function (r) { return r.eventId === j.id; })
+    .sort(function (a, b) { return String(b.submitted).localeCompare(String(a.submitted)); }).slice(0, 20)
+    .map(function (r) { return { id: String(r.id), title: String(r.title || ''), submitted: String(r.submitted), pct: Number(r.pct) || 0, score: Number(r.score) || 0, max: Number(r.max) || 0, seconds: Number(r.seconds) || 0 }; });
+  return Object.assign(judgeSummary(j, mine), { criteria: j.criteria, history: history });
+}
+
+/** A fresh speaking topic (Impromptu), job posting (Job Interview), or other prompt for events that hand one out. */
+function practicePrompt(eventId) {
+  const j = readJudging().filter(function (x) { return x.id === eventId; })[0];
+  if (!j) throw fail('not_found', 'That event isn’t available.');
+  const kind = /interview/i.test(j.name) ? 'a short, realistic entry-level job posting a high school student could apply for (title, company, 3 to 4 duties, and 3 qualifications)'
+    : /impromptu/i.test(j.name) ? 'one impromptu speaking topic on business, leadership, or current workplace issues, phrased the way FBLA phrases impromptu topics'
+    : 'one realistic scenario or topic for this event that a competitor could present on';
+  const out = aiCall('Write ' + kind + ' for practicing the FBLA event "' + j.name + '". ' + (j.format ? 'Event format: ' + j.format + ' ' : '') + 'Keep it under 120 words and keep it appropriate for high school students. Return JSON: {"prompt": "..."}',
+    { type: 'OBJECT', properties: { prompt: { type: 'STRING' } }, required: ['prompt'] }, 0.9);
+  return { prompt: String((out && out.prompt) || '').slice(0, 1200) };
+}
+
+/** Turns uploaded slides (a PDF, base64) into text for the judge. Nothing is kept. */
+function slidesText(pdf) {
+  if (!pdf) throw fail('bad_request', 'No slides were sent.');
+  const bytes = Utilities.base64Decode(pdf);
+  if (bytes.length > 20 * 1024 * 1024) throw fail('too_big', 'That PDF is over 20 MB. Export a smaller copy and try again.');
+  const blob = Utilities.newBlob(bytes, 'application/pdf', 'slides.pdf');
+  let text = '';
+  try { text = pdfToText(blob, 'slides'); }
+  catch (err) { if (err.appCode === 'no_drive') throw fail('setup', 'Reading slides needs the Drive API service turned on in Apps Script.'); throw err; }
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+  return { text: text.slice(0, 15000), words: text ? text.split(/\s+/).length : 0 };
+}
+
+/** Speech to text with Groq's Whisper model. The audio is only passed through, never saved. */
+function transcribe(audio, mime) {
+  const key = prop('GROQ_API_KEY', '');
+  if (!key) throw fail('setup', 'Voice practice needs GROQ_API_KEY in Script properties. Members can type their script instead for now.');
+  if (!audio) throw fail('bad_request', 'No recording was sent.');
+  const bytes = Utilities.base64Decode(audio);
+  if (bytes.length < 2000) throw fail('too_short', 'The recording was empty. Check that your microphone is on and try again.');
+  if (bytes.length > 24 * 1024 * 1024) throw fail('too_big', 'That recording is too long to transcribe.');
+  const type = String(mime).split(';')[0] || 'audio/webm';
+  const ext = /mp4|m4a|aac/.test(type) ? 'm4a' : /ogg/.test(type) ? 'ogg' : /wav/.test(type) ? 'wav' : /mpeg|mp3/.test(type) ? 'mp3' : 'webm';
+  const blob = Utilities.newBlob(bytes, type, 'presentation.' + ext);
+  let res;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    res = UrlFetchApp.fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'post', muteHttpExceptions: true, headers: { Authorization: 'Bearer ' + key },
+      payload: {
+        file: blob, model: prop('GROQ_WHISPER_MODEL', 'whisper-large-v3-turbo'), response_format: 'verbose_json', language: 'en', temperature: '0',
+        // A prompt with filler words nudges Whisper to keep them, so they can be counted.
+        prompt: 'Um, so, uh, I think, like, you know, our plan is, um, pretty simple.',
+      },
+    });
+    const code = res.getResponseCode();
+    if (code === 200) break;
+    const text = res.getContentText();
+    if (code === 401 || code === 403) throw fail('ai', 'The Groq API key was rejected. Check GROQ_API_KEY.');
+    if (code === 413) throw fail('too_big', 'That recording is too long to transcribe.');
+    if (code === 429) {
+      if (/per day|\(ASD\)|daily/i.test(text)) throw fail('ai_limit', 'Today’s free speech-to-text limit is used up. Type your script instead, or try again tomorrow.');
+      if (attempt < 2) { Utilities.sleep(retryAfterMs(res, text)); continue; }
+      throw fail('ai_busy', 'Speech-to-text is busy. Wait a minute and try again.');
+    }
+    if (code >= 500 && attempt < 2) { Utilities.sleep(4000 * (attempt + 1)); continue; }
+    console.error('Whisper error ' + code + ': ' + text.slice(0, 500));
+    throw fail('ai', 'Speech-to-text returned an error (' + code + '). Try again.');
+  }
+  if (res.getResponseCode() !== 200) throw fail('ai_busy', 'Speech-to-text is busy. Try again in a minute.');
+  const j = JSON.parse(res.getContentText());
+  const text = String(j.text || '').trim();
+  const segs = Array.isArray(j.segments) ? j.segments : [];
+  const duration = Number(j.duration) || (segs.length ? Number(segs[segs.length - 1].end) || 0 : 0);
+  let pauses = 0;
+  for (let i = 1; i < segs.length; i++) if (Number(segs[i].start) - Number(segs[i - 1].end) >= 3) pauses++;
+  return Object.assign({ text: text, duration: Math.round(duration), pauses: pauses }, speechStats(text, duration));
+}
+function speechStats(text, seconds) {
+  const words = text ? text.split(/\s+/).filter(String).length : 0;
+  const fillers = (text.match(/\b(u+m+|u+h+|e+r+m+|hmm+|you know)\b/gi) || []).length;
+  return { words: words, wpm: seconds > 5 ? Math.round(words / (seconds / 60)) : 0, fillers: fillers };
+}
+
+/** Questions a judge would ask about this specific presentation. */
+function judgeQuestions(eventId, title, transcript, slides, promptText) {
+  const j = readJudging().filter(function (x) { return x.id === eventId; })[0];
+  if (!j) throw fail('not_found', 'That event isn’t available.');
+  const interview = /interview/i.test(j.name);
+  const n = interview ? 5 : Math.max(2, Math.min(4, Math.round(j.qaMin) || 3));
+  const prompt = [
+    'You are an experienced FBLA judge for the 2026–27 event "' + j.name + '". ' + (j.format ? 'Format: ' + j.format : ''),
+    interview ? 'Ask ' + n + ' job interview questions, in order, that a real interviewer would ask this candidate for this job. Build on what they said.' : 'Write ' + n + ' questions you would ask in the judges’ Q&A after this presentation.',
+    'Each question must be specific to what this competitor actually said or showed: probe weak spots, unsupported claims, numbers, and how they would handle a challenge. One sentence each, under 30 words, professional and friendly.',
+    title ? 'Presentation title or topic: ' + title : '',
+    promptText ? 'The prompt they were given: ' + promptText.slice(0, 1500) : '',
+    slides ? 'Slide text:\n"""\n' + slides.slice(0, 5000) + '\n"""' : '',
+    'Transcript:\n"""\n' + (transcript || '(no transcript)').slice(0, 10000) + '\n"""',
+    'Return JSON: {"questions": ["...", "..."]}',
+  ].filter(String).join('\n');
+  const out = aiCall(prompt, { type: 'OBJECT', properties: { questions: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['questions'] }, 0.6);
+  const qs = (out && Array.isArray(out.questions) ? out.questions : []).map(function (q) { return String(q).trim(); }).filter(String).slice(0, n);
+  if (!qs.length) throw fail('ai', 'The judge didn’t come up with questions. Try again.');
+  return { questions: qs, secondsEach: interview ? 90 : Math.max(45, Math.round(((j.qaMin || 3) * 60) / qs.length)) };
+}
+
+/** Scores a practice presentation against the event's rating sheet and saves the attempt. */
+function judgePresentation(user, b) {
+  const j = readJudging().filter(function (x) { return x.id === String(b.eventId || ''); })[0];
+  if (!j) throw fail('not_found', 'That event isn’t available.');
+  if (!j.criteria.length) throw fail('not_ready', 'This event’s rating sheet hasn’t loaded yet. Try again in a minute.');
+  const transcript = String(b.transcript || '').trim().slice(0, 14000);
+  if (transcript.split(/\s+/).length < 25) throw fail('too_short', 'There isn’t enough of your presentation to score. Check your microphone, or type more of your script.');
+  const slides = String(b.slides || '').slice(0, 6000);
+  const qa = (Array.isArray(b.qa) ? b.qa : []).slice(0, 6).map(function (x) { return { q: String(x.q || '').slice(0, 400), a: String(x.a || '').slice(0, 3000) }; });
+  const seconds = Math.max(0, Math.round(Number(b.seconds) || 0));
+  const limit = Math.round((j.presentMin || 7) * 60);
+  const stats = speechStats(transcript, seconds);
+  const prompt = [
+    'You are an experienced, fair FBLA judge scoring a practice run of the 2026–27 event "' + j.name + '". ' + (j.format ? 'Format: ' + j.format : ''),
+    'Score it on this rating sheet. For each line give points from 0 to the maximum, a short exact quote (under 25 words) from the transcript as evidence, and one or two sentences on how to earn more points.',
+    'You only have a transcript' + (slides ? ' and slide text' : '') + ', so for lines that depend on what judges see (eye contact, posture, appearance, visuals not in the slide text), set judged to false, points to 0, and explain what to practice.',
+    'Be honest and specific. Practice scores should match what a real judge would give, not be generous.',
+    '\nRating sheet:\n' + j.criteria.map(function (c, i) { return (i + 1) + '. ' + c.name + ' (max ' + c.points + '): ' + c.description; }).join('\n'),
+    '\nTime used: ' + Math.floor(seconds / 60) + ':' + ('0' + (seconds % 60)).slice(-2) + ' of a ' + (j.presentMin || 7) + '-minute limit. Speaking pace: about ' + (Number(b.wpm) || stats.wpm) + ' words per minute.',
+    b.title ? 'Title or topic: ' + String(b.title).slice(0, 200) : '',
+    b.prompt ? 'Prompt they were given: ' + String(b.prompt).slice(0, 1500) : '',
+    slides ? 'Slide text:\n"""\n' + slides + '\n"""' : '',
+    'Transcript:\n"""\n' + transcript + '\n"""',
+    qa.length ? 'Judge questions and answers:\n' + qa.map(function (x, i) { return 'Q' + (i + 1) + ': ' + x.q + '\nA' + (i + 1) + ': ' + (x.a || '(no answer)'); }).join('\n') : '',
+    'Also give 2 or 3 strengths, the 3 most important improvements, and a two-sentence overall comment written to the competitor.',
+  ].filter(String).join('\n');
+  const schema = {
+    type: 'OBJECT',
+    properties: {
+      criteria: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, points: { type: 'INTEGER' }, judged: { type: 'BOOLEAN' }, evidence: { type: 'STRING' }, feedback: { type: 'STRING' } }, required: ['name', 'points', 'judged', 'evidence', 'feedback'] } },
+      strengths: { type: 'ARRAY', items: { type: 'STRING' } },
+      improvements: { type: 'ARRAY', items: { type: 'STRING' } },
+      summary: { type: 'STRING' },
+    },
+    required: ['criteria', 'strengths', 'improvements', 'summary'],
+  };
+  const out = aiCall(prompt, schema, 0.2);
+  const given = out && Array.isArray(out.criteria) ? out.criteria : [];
+  const scored = j.criteria.map(function (c, i) {
+    const g = given.filter(function (x) { return norm(x.name) === norm(c.name); })[0] || given[i] || {};
+    const judged = g.judged !== false && g.points !== undefined;
+    return {
+      name: c.name, max: c.points, judged: judged,
+      points: judged ? Math.max(0, Math.min(c.points, Math.round(Number(g.points) || 0))) : null,
+      evidence: String(g.evidence || '').slice(0, 300), feedback: String(g.feedback || '').slice(0, 500),
+    };
+  });
+  const judgedRows = scored.filter(function (x) { return x.judged; });
+  const score = judgedRows.reduce(function (n, x) { return n + x.points; }, 0);
+  const max = judgedRows.reduce(function (n, x) { return n + x.max; }, 0);
+  const result = {
+    id: 'p' + Utilities.getUuid().replace(/-/g, '').slice(0, 14), eventId: j.id, eventName: j.name, title: String(b.title || '').slice(0, 200),
+    submitted: nowIso(), seconds: seconds, limitSeconds: limit, words: stats.words, wpm: Number(b.wpm) || stats.wpm,
+    fillers: typeof b.fillers === 'number' ? b.fillers : stats.fillers, pauses: Number(b.pauses) || 0,
+    score: score, max: max, pct: max ? Math.round((score / max) * 100) : 0, criteria: scored,
+    strengths: (out.strengths || []).map(String).slice(0, 4), improvements: (out.improvements || []).map(String).slice(0, 4),
+    summary: String(out.summary || '').slice(0, 800), qa: qa, mode: b.mode === 'typed' ? 'typed' : 'voice', prompt: String(b.prompt || '').slice(0, 1500),
+  };
+  const detail = Object.assign({}, result);
+  delete detail.transcript;
+  withLock(function () {
+    appendRows('Presentations', [{
+      id: result.id, email: user.email, eventId: j.id, eventName: j.name, title: result.title, submitted: result.submitted,
+      seconds: seconds, words: result.words, wpm: result.wpm, fillers: result.fillers, pauses: result.pauses,
+      score: score, max: max, pct: result.pct, detail: JSON.stringify(detail), transcript: transcript,
+    }]);
+  });
+  result.transcript = transcript;
+  return result;
+}
+
+function presentResult(user, id) {
+  const r = readAll('Presentations').filter(function (x) { return x.id === id && (x.email === user.email || user.admin); })[0];
+  if (!r) throw fail('not_found', 'Those results aren’t available.');
+  let d = {};
+  try { d = JSON.parse(String(r.detail || '{}')); } catch (_) { d = {}; }
+  d.transcript = String(r.transcript || '');
+  return d;
+}
+
+/** Admin: load every presentation event's rating sheet, about 40 seconds per call. */
+function adminLoadJudging(skip) {
+  const seeded = seedJudging();
+  CacheService.getScriptCache().put('admin_loading', '1', 180);
+  const started = Date.now();
+  const loaded = [], failed = [];
+  let busy = false, daily = false, message = '';
+  const skipSet = {};
+  skip.forEach(function (id) { skipSet[id] = true; });
+  const todo = readJudging().filter(function (j) { return j.guide && !j.criteria.length && !skipSet[j.id]; });
+  for (let i = 0; i < todo.length && Date.now() - started < 40000; i++) {
+    try { loadRubric(todo[i]); loaded.push(todo[i].name); }
+    catch (err) {
+      if (err.appCode === 'ai_busy') { busy = true; message = err.message; break; }
+      if (err.appCode === 'ai_limit') { daily = true; message = err.message; break; }
+      if (err.appCode === 'setup') throw err;
+      failed.push({ id: todo[i].id, name: todo[i].name, error: err.appCode ? err.message : 'Something went wrong.' });
+    }
+  }
+  const all = readJudging();
+  const remaining = all.filter(function (j) { return j.guide && !j.criteria.length && !skipSet[j.id] && !failed.some(function (f) { return f.id === j.id; }); }).length;
+  return { added: seeded.added, loaded: loaded, failed: failed, remaining: remaining, busy: busy, daily: daily, message: message, ready: all.filter(function (j) { return j.criteria.length; }).length, total: all.length };
+}
+function adminReloadRubric(eventId) {
+  const j = readJudging().filter(function (x) { return x.id === eventId; })[0];
+  if (!j) throw fail('not_found', 'That event isn’t available.');
+  const r = loadRubric(j);
+  return { criteria: r.criteria, note: r.note };
+}
+
 /* ====================== Background top-up and setup ====================== */
 
 /** Runs on a timer. Writes questions for whichever topic has the fewest, until every topic reaches BANK_TARGET. */
@@ -1426,6 +1796,13 @@ function topUpBanks() {
     catch (err) { console.warn('Topics for ' + waiting[i].name + ' failed: ' + err.message); }
   }
   if (waiting.length) return;
+  // Then the presentation events' rating sheets, two per run.
+  const judgingWaiting = readJudging().filter(function (j) { return j.guide && !j.criteria.length && j.note.indexOf('Couldn') !== 0; });
+  for (let i = 0; i < Math.min(2, judgingWaiting.length); i++) {
+    try { loadRubric(judgingWaiting[i]); console.log('Loaded rating sheet for ' + judgingWaiting[i].name); }
+    catch (err) { console.warn('Rating sheet for ' + judgingWaiting[i].name + ' failed: ' + err.message); if (err.appCode === 'ai_busy' || err.appCode === 'ai_limit') return; }
+  }
+  if (judgingWaiting.length) return;
   for (let i = 0; i < batches && Date.now() - started < 4 * 60 * 1000; i++) {
     const events = readEvents();
     const qs = readAll('Questions', 10).filter(function (r) { return r.status === 'active'; });
@@ -1456,6 +1833,8 @@ function setup() {
     const sh = sheet(name);
     sh.getRange(1, 1, 1, TABS[name].length).setValues([TABS[name]]).setFontWeight('bold');
   });
+  const judging = seedJudging();
+  console.log('Added ' + judging.added + ' presentation events to the Judging tab.');
   const seeded = seedFblaTests();
   console.log('Added ' + seeded.added + ' FBLA tests to the Events tab. Their topics load from the official guidelines on the timer, or click "Load all tests" on the Admin page.');
   ScriptApp.getProjectTriggers().forEach(function (t) {

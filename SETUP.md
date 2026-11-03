@@ -78,6 +78,16 @@ You don't have to click the button at all: after `setup` runs, the 10-minute tim
 
 Filling every topic to 30 questions takes roughly 1,000 AI calls. At the timer's pace that's a few days, as long as the free daily limit holds, so click **Write 10 more** for the tests with the most RCE sign-ups first.
 
+## 5. Presentation judge
+
+Members practice 32 presentation, speaking, interview, and chapter events out loud and get scored on each event's official rating sheet.
+
+- **Nothing to set up by hand.** Running `setup` adds the events to the **Judging** tab. Each event's rating sheet and time limits load from its official guidelines the first time a member opens it, or click **Load all rating sheets** on the Admin page to load them all ahead of time.
+- **Voice needs Groq.** Recordings are turned into text by Groq's Whisper model (`GROQ_WHISPER_MODEL`, default `whisper-large-v3-turbo`), so `GROQ_API_KEY` must be set. Without it, members can still type their script.
+- **Microphones on school Chromebooks.** Chrome asks for permission the first time. If it's blocked by the school, IT needs to allow the microphone for `https://southbrunswickfbla.github.io`.
+- **Privacy.** The recording is sent to Groq to be transcribed and is never saved. The **Presentations** tab keeps each member's transcript and scores, so share the sheet only with officers and advisers, and let your adviser know students' voices are transcribed by an outside service.
+- **What it can't judge.** Rating sheet lines about appearance, eye contact, or body language are shown as "judged in person" and left out of the score.
+
 ## Try it locally
 
 ```bash
@@ -100,6 +110,8 @@ Add a link to `https://southbrunswickfbla.github.io/prep/` in the chapter site's
 | Stats | Each member's attempts, correct answers, and missed questions per topic |
 | Sessions | Each finished drill or test, its level, and its answers |
 | Notes | The AI study guide for each topic, written once and shared |
+| Judging | Each presentation event's rating sheet, time limits, and format |
+| Presentations | Each practice presentation: scores, feedback, and the transcript |
 | Users | Each member's school email, name, and last visit |
 | Flags | Every report, with who sent it and why |
 

@@ -101,7 +101,8 @@ function Header() {
         {status === 'signedIn' && (
           <nav className="ml-4 hidden items-center gap-1 md:flex" aria-label="Main">
             <NavLink to="/" end className={link}>Home</NavLink>
-            <NavLink to="/practice" className={link}>Practice</NavLink>
+            <NavLink to="/practice" className={link}>Tests</NavLink>
+            <NavLink to="/present" className={link}>Presentations</NavLink>
             <NavLink to="/progress" className={link}>Progress</NavLink>
             {data?.admin && <NavLink to="/admin" className={link}>Admin</NavLink>}
           </nav>
@@ -121,7 +122,8 @@ function Header() {
       {status === 'signedIn' && (
         <nav className="flex gap-1 overflow-x-auto border-t border-line px-3 md:hidden" aria-label="Main">
           <NavLink to="/" end className={link}>Home</NavLink>
-          <NavLink to="/practice" className={link}>Practice</NavLink>
+          <NavLink to="/practice" className={link}>Tests</NavLink>
+          <NavLink to="/present" className={link}>Presentations</NavLink>
           <NavLink to="/progress" className={link}>Progress</NavLink>
           {data?.admin && <NavLink to="/admin" className={link}>Admin</NavLink>}
         </nav>
@@ -155,7 +157,8 @@ function Footer() {
         <div>
           <p className="font-semiwide text-[15px] font-extrabold text-gold">Prep</p>
           <ul className="mt-3 space-y-2 text-[15px] text-navy-100">
-            <li><Link to="/practice" className="hover:text-white">Practice</Link></li>
+            <li><Link to="/practice" className="hover:text-white">Test practice</Link></li>
+            <li><Link to="/present" className="hover:text-white">Presentation judge</Link></li>
             <li><Link to="/progress" className="hover:text-white">Your progress</Link></li>
           </ul>
         </div>

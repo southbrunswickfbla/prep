@@ -91,7 +91,10 @@ export function Dashboard() {
           <h1 className="font-wide text-[clamp(34px,6vw,60px)] font-black leading-[0.95] tracking-tight">Welcome back, {profile?.givenName || 'friend'}.</h1>
           <div className="mt-5"><Countdown compact /></div>
         </div>
-        <Link to="/practice" className={btn.gold}>Start practicing</Link>
+        <div className="flex flex-wrap gap-3">
+          <Link to="/practice" className={btn.gold}>Practice a test</Link>
+          <Link to="/present" className={`${btn.quiet} bg-white/10 text-white hover:bg-white/20`}>Practice a presentation</Link>
+        </div>
       </section>
 
       <div className="mt-10 grid gap-8 lg:grid-cols-[1.6fr_1fr]">

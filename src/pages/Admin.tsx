@@ -184,6 +184,37 @@ export function Admin() {
   }
 
   const [ready, setReady] = useState<ReadinessRow[] | null>(null);
+  const [judging, setJudging] = useState<{ ready: number; total: number } | null>(null);
+  const [jLoad, setJLoad] = useState<{ running: boolean; text: string; tone: 'gold' | 'bad' } | null>(null);
+  const loadJudgingCounts = useCallback(() => {
+    api.present.events().then((evs) => setJudging({ ready: evs.filter((e) => e.ready).length, total: evs.length })).catch(() => {});
+  }, []);
+  useEffect(() => { loadJudgingCounts(); }, [loadJudgingCounts]);
+
+  async function loadAllJudging() {
+    const skip: string[] = [];
+    let loaded = 0, busyRounds = 0;
+    const failed: string[] = [];
+    setJLoad({ running: true, text: 'Reading the rating sheets…', tone: 'gold' });
+    try {
+      for (let round = 0; round < 60; round++) {
+        const r = await api.admin.loadJudging(skip);
+        loaded += r.loaded.length;
+        r.failed.forEach((f) => { skip.push(f.id); failed.push(`${f.name}: ${f.error}`); });
+        setJudging({ ready: r.ready, total: r.total });
+        if (r.daily) { setJLoad({ running: false, text: (r.message || 'Today’s AI limit is used up.') + ' The rest will load on their own.', tone: 'bad' }); return; }
+        if (r.busy) {
+          if (++busyRounds > 10) { setJLoad({ running: false, text: 'The AI has been busy for a while. The rest will load on their own in the background.', tone: 'bad' }); return; }
+          for (let sec = 45; sec > 0; sec--) { setJLoad({ running: true, text: `The AI is busy. Trying again in ${sec} seconds…`, tone: 'gold' }); await new Promise((res) => setTimeout(res, 1000)); }
+          continue;
+        }
+        busyRounds = 0;
+        setJLoad({ running: true, text: `Read ${plural(loaded, 'rating sheet')} so far, ${r.remaining} to go. Keep this page open.`, tone: 'gold' });
+        if (r.remaining === 0 || (!r.loaded.length && !r.failed.length)) break;
+      }
+      setJLoad({ running: false, text: `Done. Read ${plural(loaded, 'rating sheet')}.${failed.length ? ' Problems: ' + failed.join(' ') : ''}`, tone: failed.length ? 'bad' : 'gold' });
+    } catch (e) { setJLoad({ running: false, text: errorText(e), tone: 'bad' }); }
+  }
   const load = useCallback(async () => {
     try { setOv(await api.admin.overview()); setError(''); } catch (e) { setError(errorText(e)); }
   }, []);
@@ -227,6 +258,18 @@ export function Admin() {
             )}
           </div>
         )}
+      </section>
+
+      <section className="cut mt-6 bg-navy-900 p-6 text-white">
+        <h2 className="font-semiwide text-xl font-extrabold text-gold">Presentation events</h2>
+        <p className="mt-1 max-w-[70ch] text-[15px] text-navy-100">
+          The presentation judge reads each event’s rating sheet and time limits from the official guidelines. Each one also loads the first time a member opens it, so this is only needed to get them all ready ahead of time.
+        </p>
+        {judging && <p className="mt-3 text-[14px] font-bold text-gold-300">{judging.ready} of {judging.total} rating sheets loaded.</p>}
+        <button className={`${btn.gold} mt-4`} disabled={!!jLoad?.running} onClick={() => void loadAllJudging()}>
+          {jLoad?.running ? 'Reading the rating sheets…' : 'Load all rating sheets'}
+        </button>
+        {jLoad && <div className="mt-4"><Notice tone={jLoad.tone}>{jLoad.text}</Notice></div>}
       </section>
 
       <section className="cut mt-6 bg-white p-6">

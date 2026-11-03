@@ -1,6 +1,6 @@
 import { API_URL, DEMO } from './config';
 import { demoCall } from './demo';
-import type { AdminOverview, Dashboard, Level, Mode, ReadinessRow, Results, StartRes, StudyNotes, Topic } from '../types';
+import type { AdminOverview, Criterion, Dashboard, JudgeEvent, JudgeEventDetail, Level, Mode, PresentResult, ReadinessRow, Results, StartRes, StudyNotes, Topic, Transcript } from '../types';
 
 export class ApiError extends Error {
   code: string;
@@ -56,6 +56,17 @@ export const api = {
     call<Results>('submit', { sessionId, answers, seconds }),
   results: (sessionId: string) => call<Results>('results', { sessionId }),
   flag: (questionId: string, reason: string) => call<{ hidden: boolean }>('flag', { questionId, reason }),
+  present: {
+    events: () => call<JudgeEvent[]>('presentEvents'),
+    event: (eventId: string) => call<JudgeEventDetail>('presentEvent', { eventId }),
+    prompt: (eventId: string) => call<{ prompt: string }>('practicePrompt', { eventId }),
+    slides: (pdf: string) => call<{ text: string; words: number }>('slidesText', { pdf }),
+    transcribe: (audio: string, mime: string) => call<Transcript>('transcribe', { audio, mime }),
+    questions: (eventId: string, title: string, transcript: string, slides: string, prompt: string) =>
+      call<{ questions: string[]; secondsEach: number }>('judgeQuestions', { eventId, title, transcript, slides, prompt }),
+    judge: (body: Record<string, unknown>) => call<PresentResult>('judgePresentation', body),
+    result: (id: string) => call<PresentResult>('presentResult', { id }),
+  },
   admin: {
     overview: () => call<AdminOverview>('adminOverview'),
     addEvents: (names: string[]) => call<{ added: number }>('addEvents', { names }),
@@ -71,6 +82,9 @@ export const api = {
       call<{ added: number; loaded: string[]; failed: { id: string; name: string; error: string }[]; remaining: number; busy?: boolean; daily?: boolean; message?: string }>('loadFbla', { skip }),
     reloadTopics: (eventId: string) => call<{ topics: Topic[]; note: string }>('reloadTopics', { eventId }),
     readiness: () => call<ReadinessRow[]>('readiness'),
+    loadJudging: (skip: string[]) =>
+      call<{ loaded: string[]; failed: { id: string; name: string; error: string }[]; remaining: number; busy?: boolean; daily?: boolean; message?: string; ready: number; total: number }>('loadJudging', { skip }),
+    reloadRubric: (eventId: string) => call<{ criteria: Criterion[]; note: string }>('reloadRubric', { eventId }),
   },
 };
 

@@ -74,3 +74,29 @@ export type ReadinessRow = {
   members: number; answered: number; accuracy: number | null;
   byLevel: Record<Level, { tests: number; avg: number | null; best: number | null }>;
 };
+
+/* ---------- Presentation judge ---------- */
+
+export type Criterion = { name: string; points: number; description: string };
+
+export type JudgeEvent = {
+  id: string; name: string; category: string; guide: string; ready: boolean;
+  presentMin: number; qaMin: number; prepMin: number; format: string; note: string;
+  attempts: number; best: number | null; last: number | null;
+};
+
+export type PresentAttemptRow = { id: string; title: string; submitted: string; pct: number; score: number; max: number; seconds: number };
+
+export type JudgeEventDetail = JudgeEvent & { criteria: Criterion[]; history: PresentAttemptRow[] };
+
+export type Transcript = { text: string; duration: number; words: number; wpm: number; fillers: number; pauses: number };
+
+export type CriterionScore = { name: string; max: number; points: number | null; judged: boolean; evidence: string; feedback: string };
+
+export type PresentResult = {
+  id: string; eventId: string; eventName: string; title: string; submitted: string;
+  seconds: number; limitSeconds: number; words: number; wpm: number; fillers: number; pauses: number;
+  score: number; max: number; pct: number; criteria: CriterionScore[];
+  strengths: string[]; improvements: string[]; summary: string;
+  qa: { q: string; a: string }[]; mode: 'voice' | 'typed'; prompt: string; transcript: string;
+};
