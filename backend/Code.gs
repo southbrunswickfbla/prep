@@ -1,5 +1,5 @@
 /**
- * SBHS FBLA Prep — backend (Google Apps Script), v2.1
+ * SBHS FBLA Prep — backend (Google Apps Script), v2.2
  *
  * Paste this into the Apps Script project attached to the "FBLA Prep Data" Google Sheet,
  * save, then run setup() once. Full steps are in SETUP.md.
@@ -12,7 +12,13 @@
  *
  * Script properties (Project Settings → Script properties):
  *  GOOGLE_CLIENT_ID      required. The same OAuth client ID as the chapter site.
- *  GEMINI_API_KEY        required for AI. Made at aistudio.google.com by an adult (Google requires 18+).
+ *  AI keys: set at least one. With more than one, AI_PROVIDER picks ("groq", "xai", or "gemini").
+ *  GROQ_API_KEY          Groq (console.groq.com). Default model openai/gpt-oss-120b, falling back to openai/gpt-oss-20b.
+ *  XAI_API_KEY           xAI Grok (console.x.ai). Set XAI_MODEL to a model name from the xAI console.
+ *  GEMINI_API_KEY        Google Gemini (aistudio.google.com).
+ *  AI_PROVIDER           optional: "groq", "xai", or "gemini". Default: the first key that's set, in that order.
+ *  GROQ_MODEL, GROQ_FALLBACK_MODEL, XAI_MODEL, GEMINI_MODEL, GEMINI_FALLBACK_MODEL: optional model names.
+ *  Reading the guidelines PDFs needs the Drive API service: in the editor, Services (+) → Drive API → Add.
  *  ADMIN_EMAILS          comma-separated officer emails that can use the Admin page.
  *  ALLOWED_DOMAINS       default "sbstudents.org,sbschools.org".
  *  STAFF_DOMAIN          default "sbschools.org". Staff can practice and skip the member check.
@@ -28,7 +34,7 @@
  *  AI_MIN_GAP_MS        default 6000. Minimum time between AI calls, to stay under the free per-minute limit.
  */
 
-const VERSION = 'v2.1';
+const VERSION = 'v2.2';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 
 const TABS = {
@@ -647,6 +653,141 @@ function flagQuestion(user, questionId, reason) {
 
 /* ====================== AI ====================== */
 
+/* ---------- Choosing an AI provider ---------- */
+
+function aiProvider() {
+  const want = String(prop('AI_PROVIDER', '')).toLowerCase();
+  const has = { groq: !!prop('GROQ_API_KEY', ''), xai: !!prop('XAI_API_KEY', ''), gemini: !!prop('GEMINI_API_KEY', '') };
+  if (want && has[want]) return want;
+  if (has.groq) return 'groq';
+  if (has.xai) return 'xai';
+  if (has.gemini) return 'gemini';
+  return '';
+}
+function aiModelLabel() {
+  const p = aiProvider();
+  if (p === 'groq') return 'Groq: ' + prop('GROQ_MODEL', 'openai/gpt-oss-120b');
+  if (p === 'xai') return 'xAI Grok: ' + prop('XAI_MODEL', '(set XAI_MODEL)');
+  if (p === 'gemini') return 'Gemini: ' + prop('GEMINI_MODEL', DEFAULT_MODEL);
+  return 'none';
+}
+
+/**
+ * Sends a prompt to whichever AI is set up and returns the parsed JSON reply.
+ * input is a string, or (Gemini only) a list of parts that can include a PDF.
+ * schema is a Gemini-style schema; for other providers it becomes a JSON Schema.
+ */
+function aiCall(input, schema, temperature) {
+  const p = aiProvider();
+  if (!p) throw fail('ai', 'The AI isn’t connected yet. Add GROQ_API_KEY (or XAI_API_KEY or GEMINI_API_KEY) in Script properties.');
+  if (p === 'gemini') return gemini(input, schema, temperature);
+  const text = typeof input === 'string' ? input : (input || []).map(function (x) { return x.text || ''; }).join('\n');
+  return openAiCompatCall(p, text, schema, temperature);
+}
+
+/** Groq and xAI both use the OpenAI chat format. */
+function openAiCompatCall(provider, text, schema, temperature) {
+  const cfg = provider === 'groq'
+    ? { url: 'https://api.groq.com/openai/v1/chat/completions', key: prop('GROQ_API_KEY', ''), models: [prop('GROQ_MODEL', 'openai/gpt-oss-120b'), prop('GROQ_FALLBACK_MODEL', 'openai/gpt-oss-20b')], name: 'Groq' }
+    : { url: 'https://api.x.ai/v1/chat/completions', key: prop('XAI_API_KEY', ''), models: [prop('XAI_MODEL', '')], name: 'xAI' };
+  const models = cfg.models.filter(function (m, i, a) { return m && m !== 'none' && a.indexOf(m) === i; });
+  if (!models.length) throw fail('ai', 'Set XAI_MODEL in Script properties to a model name from the xAI console.');
+  const wrapped = schema && String(schema.type).toUpperCase() === 'ARRAY';
+  const jsonSchema = schema ? toJsonSchema(wrapped ? { type: 'OBJECT', properties: { items: schema }, required: ['items'] } : schema) : null;
+  const prompt = text + (wrapped ? '\n\nReturn a JSON object with one key, "items", holding the array.' : '') + '\n\nReply with JSON only.';
+  let lastBusy = null, lastLimit = null;
+  for (let m = 0; m < models.length; m++) {
+    try {
+      const out = openAiCompatOnce(cfg, models[m], prompt, jsonSchema, temperature);
+      if (wrapped) return out && Array.isArray(out.items) ? out.items : (Array.isArray(out) ? out : (out && Array.isArray(out.questions) ? out.questions : []));
+      return out;
+    } catch (err) {
+      // Groq's limits are per model, so a busy or used-up model can fall back to the next one.
+      if (err.appCode === 'ai_limit') { lastLimit = err; continue; }
+      if (err.appCode === 'ai_busy' || err.appCode === 'ai_fallback_missing') { lastBusy = err; continue; }
+      throw err;
+    }
+  }
+  if (lastLimit && !lastBusy) throw lastLimit;
+  throw lastBusy && lastBusy.appCode === 'ai_busy' ? lastBusy : (lastLimit || fail('ai_busy', cfg.name + ' is busy right now. Try again in a few minutes.'));
+}
+
+function openAiCompatOnce(cfg, model, prompt, jsonSchema, temperature) {
+  let format = jsonSchema ? 'schema' : 'object';
+  const waits = [4000, 8000, 15000];
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
+    paceAi();
+    const body = {
+      model: model,
+      messages: [
+        { role: 'system', content: 'You write accurate study material and practice questions for FBLA high school competitive events. Always reply with valid JSON only.' },
+        { role: 'user', content: prompt },
+      ],
+      temperature: temperature === undefined ? 0.7 : temperature,
+      response_format: format === 'schema' ? { type: 'json_schema', json_schema: { name: 'reply', strict: true, schema: jsonSchema } } : { type: 'json_object' },
+    };
+    if (/gpt-oss/.test(model)) body.reasoning_effort = 'medium';
+    const res = UrlFetchApp.fetch(cfg.url, {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { Authorization: 'Bearer ' + cfg.key }, payload: JSON.stringify(body),
+    });
+    const code = res.getResponseCode();
+    const textOut = res.getContentText();
+    if (code === 200) {
+      const j = JSON.parse(textOut);
+      const msg = j.choices && j.choices[0] && j.choices[0].message;
+      const content = msg && msg.content;
+      if (!content) throw fail('ai', cfg.name + ' didn’t send anything back. Try again.');
+      return parseJsonLoose(String(content).replace(/<think>[\s\S]*?<\/think>/g, '').trim());
+    }
+    if (code === 401 || code === 403) throw fail('ai', 'The ' + cfg.name + ' API key was rejected. Check it in Script properties.');
+    if (code === 404 || (code === 400 && /model/i.test(textOut) && /not (found|exist)|decommissioned|does not exist/i.test(textOut))) {
+      if (cfg.models.indexOf(model) > 0) throw fail('ai_fallback_missing', 'Fallback model not found.');
+      throw fail('ai', 'The model "' + model + '" isn’t available on ' + cfg.name + '. Set a different model name in Script properties.');
+    }
+    if (code === 400 && format === 'schema') { format = 'object'; continue; } // this model doesn't do strict schemas
+    if (code === 429) {
+      if (/per day|\(TPD\)|\(RPD\)|daily/i.test(textOut)) throw fail('ai_limit', 'Today’s free ' + cfg.name + ' limit for ' + model + ' is used up. It resets daily, and questions already written still work.');
+      if (attempt < 2) { Utilities.sleep(retryAfterMs(res, textOut)); continue; }
+      throw fail('ai_busy', 'Too many AI requests this minute. Wait a minute and try again.');
+    }
+    if (code >= 500) {
+      if (attempt < waits.length) { Utilities.sleep(waits[attempt]); continue; }
+      throw fail('ai_busy', cfg.name + ' is overloaded right now. Try again in a few minutes.');
+    }
+    console.error(cfg.name + ' error ' + code + ': ' + textOut.slice(0, 600));
+    throw fail('ai', cfg.name + ' returned an error (' + code + '). Try again.');
+  }
+  throw fail('ai_busy', cfg.name + ' is busy right now. Try again in a few minutes.');
+}
+
+/** How long a 429 reply asks us to wait (Retry-After header, or "try again in 12.5s"), capped at 40 seconds. */
+function retryAfterMs(res, text) {
+  let ms = 0;
+  try {
+    const h = res.getHeaders() || {};
+    const v = h['retry-after'] || h['Retry-After'];
+    if (v && isFinite(Number(v))) ms = Number(v) * 1000;
+  } catch (_) { /* no headers */ }
+  const m = String(text).match(/try again in\s*(?:(\d+)m)?\s*([\d.]+)s/i);
+  if (!ms && m) ms = ((Number(m[1]) || 0) * 60 + Number(m[2])) * 1000;
+  return Math.min(Math.max(ms + 500, 3000), 40000);
+}
+
+/** Turns a Gemini-style schema (OBJECT, STRING, ...) into a strict JSON Schema. */
+function toJsonSchema(s) {
+  const t = String(s.type || '').toLowerCase();
+  if (t === 'object') {
+    const props = {};
+    Object.keys(s.properties || {}).forEach(function (k) { props[k] = toJsonSchema(s.properties[k]); });
+    return { type: 'object', properties: props, required: Object.keys(props), additionalProperties: false };
+  }
+  if (t === 'array') return { type: 'array', items: toJsonSchema(s.items || { type: 'STRING' }) };
+  const out = { type: t === 'integer' ? 'integer' : t === 'number' ? 'number' : t === 'boolean' ? 'boolean' : 'string' };
+  if (s.enum) out.enum = s.enum;
+  return out;
+}
+
 /**
  * Calls Gemini. Free-tier friendly: spaces calls out, waits through "overloaded" (503) replies,
  * honors Google's retry delay on rate limits (429), and falls back to a lighter model when the main one stays busy.
@@ -784,7 +925,7 @@ function generateQuestions(ev, topicName, count, difficulty) {
     },
   };
 
-  const out = gemini(prompt, schema, 0.8);
+  const out = aiCall(prompt, schema, 0.8);
   const items = Array.isArray(out) ? out : (out && Array.isArray(out.questions) ? out.questions : []);
   const seen = {};
   existing.forEach(function (q) { seen[norm(q.stem)] = true; });
@@ -840,7 +981,7 @@ function studyNotes(user, eventId, topicName, regenerate) {
     'Use only "## " headings, "- " bullets, and **bold**. Keep it under 500 words. Stick to well-established facts and skip anything that changes from year to year.',
     'Return JSON: {"content": "<the study guide>"}.',
   ].filter(String).join('\n');
-  const out = gemini(prompt, { type: 'OBJECT', properties: { content: { type: 'STRING' } }, required: ['content'] }, 0.4);
+  const out = aiCall(prompt, { type: 'OBJECT', properties: { content: { type: 'STRING' } }, required: ['content'] }, 0.4);
   const content = String((out && out.content) || '').trim().slice(0, 12000);
   if (!content) throw fail('ai', 'The AI didn’t write the study guide. Try again.');
   const updated = nowIso();
@@ -895,7 +1036,7 @@ function adminOverview() {
   });
   return {
     events: eventSummaries(events), flagged: flagged, target: num('BANK_TARGET', 30),
-    aiReady: !!prop('GEMINI_API_KEY', ''), model: prop('GEMINI_MODEL', DEFAULT_MODEL),
+    aiReady: !!aiProvider(), model: aiModelLabel(),
   };
 }
 
@@ -984,7 +1125,7 @@ function suggestTopics(name, guideText) {
     },
     required: ['topics'],
   };
-  const out = gemini(prompt, schema, 0.2);
+  const out = aiCall(prompt, schema, 0.2);
   const topics = cleanTopics(Array.isArray(out) ? out : out && out.topics);
   if (!topics.length) throw fail('ai', 'The AI didn’t find any topics. Paste more of the guidelines and try again.');
   // Make the weights add up to exactly 100.
@@ -1123,49 +1264,109 @@ function loadGuideTopics(ev) {
   try { blob = fetchGuidePdf(ev.guide); }
   catch (err) { saveNote(ev, 'Couldn’t download the guidelines. Check the link, then try again.'); throw err; }
 
-  const prompt = [
-    'This PDF is the official FBLA (Future Business Leaders of America) 2026–27 competitive event guidelines for "' + ev.name + '".',
-    'Find the objective test’s study guide (the section titled "Study Guide: Knowledge Areas and Objectives").',
-    'Return every knowledge area exactly as the guidelines name it, the number of test items shown next to it in parentheses, and a summary of its objectives in your own words (under 300 characters).',
-    'Also return the total number of test questions from "Event Elements". If the event has no objective test, return an empty topics list.',
-  ].join('\n');
-  const schema = {
-    type: 'OBJECT',
-    properties: {
-      topics: {
-        type: 'ARRAY',
-        items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, items: { type: 'INTEGER' }, summary: { type: 'STRING' } }, required: ['name', 'items', 'summary'] },
-      },
-      questions: { type: 'INTEGER' },
-    },
-    required: ['topics'],
-  };
-  const out = gemini([
-    { inline_data: { mime_type: 'application/pdf', data: Utilities.base64Encode(blob.getBytes()) } },
-    { text: prompt },
-  ], schema, 0);
+  // 1. Turn the PDF into text with Google Drive, then read the knowledge areas straight from it (no AI needed).
+  let text = '';
+  try { text = pdfToText(blob, ev.name); }
+  catch (err) { if (err.appCode !== 'no_drive') throw err; }
 
-  const raw = (out && Array.isArray(out.topics) ? out.topics : []).filter(function (t) { return t && String(t.name || '').trim(); });
+  let raw = [], expected = 100;
+  if (text) {
+    const parsed = parseKnowledgeAreas(text);
+    raw = parsed.topics;
+    expected = parsed.questions || 100;
+  }
+
+  // 2. If that didn't work, ask the AI: with the text, or (Gemini only) with the PDF itself.
+  if (raw.length < 2) {
+    const prompt = [
+      (text ? 'Below is the text of' : 'This PDF is') + ' the official FBLA (Future Business Leaders of America) 2026–27 competitive event guidelines for "' + ev.name + '".',
+      'Find the objective test’s study guide (the section titled "Study Guide: Knowledge Areas and Objectives").',
+      'Return every knowledge area exactly as the guidelines name it, the number of test items shown next to it in parentheses, and a summary of its objectives in your own words (under 300 characters).',
+      'Also return the total number of test questions from "Event Elements". If the event has no objective test, return an empty topics list.',
+    ].join('\n');
+    const schema = {
+      type: 'OBJECT',
+      properties: {
+        topics: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, items: { type: 'INTEGER' }, summary: { type: 'STRING' } }, required: ['name', 'items', 'summary'] } },
+        questions: { type: 'INTEGER' },
+      },
+      required: ['topics', 'questions'],
+    };
+    let out;
+    if (text) out = aiCall(prompt + '\n\nGuidelines:\n"""\n' + text.slice(0, 40000) + '\n"""', schema, 0);
+    else if (prop('GEMINI_API_KEY', '')) out = gemini([{ inline_data: { mime_type: 'application/pdf', data: Utilities.base64Encode(blob.getBytes()) } }, { text: prompt }], schema, 0);
+    else throw fail('setup', 'Turn on the Drive API service in Apps Script (Services + → Drive API → Add) so FBLA Prep can read the guidelines.');
+    raw = (out && Array.isArray(out.topics) ? out.topics : []).filter(function (t) { return t && String(t.name || '').trim(); })
+      .map(function (t) { return { name: String(t.name).trim(), items: Math.max(0, Math.round(Number(t.items) || 0)), summary: String(t.summary || '') }; });
+    expected = Number(out && out.questions) || 100;
+  }
+
   if (!raw.length) {
     saveNote(ev, 'Couldn’t find test topics in the guidelines. Add them by hand.');
     throw fail('guide', 'No test topics were found in the guidelines for ' + ev.name + '.');
   }
-  const total = raw.reduce(function (n, t) { return n + Math.max(0, Math.round(Number(t.items) || 0)); }, 0);
+  const total = raw.reduce(function (n, t) { return n + t.items; }, 0);
   const topics = cleanTopics(raw.map(function (t) {
-    const items = Math.max(0, Math.round(Number(t.items) || 0));
-    return { name: t.name, items: items, weight: total ? (items / total) * 100 : 100 / raw.length, objectives: t.summary };
+    return { name: t.name, items: t.items, weight: total ? (t.items / total) * 100 : 100 / raw.length, objectives: t.summary };
   }));
-  // Make weights add up to exactly 100.
   const sum = topics.reduce(function (n, t) { return n + t.weight; }, 0);
   if (topics.length) topics[0].weight += 100 - sum;
 
-  const expected = Number(out.questions) || 100;
   const note = total === expected ? 'Loaded from the 2026–27 guidelines.' : 'Check these: the test items add up to ' + total + ', but the guidelines say ' + expected + ' questions.';
   withLock(function () {
     const fresh = readEvents(true).filter(function (e) { return e.id === ev.id; })[0] || ev;
     writeRow('Events', fresh._row, eventRow(fresh, { topics: JSON.stringify(topics), note: note }));
   });
   return { topics: topics, note: note };
+}
+
+/** Converts a PDF to text by making a temporary Google Doc with the Drive API service, then deleting it. */
+function pdfToText(blob, name) {
+  if (typeof Drive === 'undefined' || !Drive.Files) throw fail('no_drive', 'Drive API service is off.');
+  let id = '';
+  try {
+    blob.setName('FBLA Prep temp - ' + name + '.pdf');
+    if (Drive.Files.create) id = Drive.Files.create({ name: 'FBLA Prep temp - ' + name, mimeType: 'application/vnd.google-apps.document' }, blob).id;
+    else id = Drive.Files.insert({ title: 'FBLA Prep temp - ' + name, mimeType: 'application/vnd.google-apps.document' }, blob, { convert: true }).id;
+    return DocumentApp.openById(id).getBody().getText();
+  } finally {
+    if (id) { try { DriveApp.getFileById(id).setTrashed(true); } catch (_) { /* leave it */ } }
+  }
+}
+
+/**
+ * Reads "Knowledge Area Name (30 test items)" lines from the guidelines text, with the objective lines under each.
+ * Returns { topics: [{name, items, summary}], questions } or empty topics if the format isn't found.
+ */
+function parseKnowledgeAreas(text) {
+  const all = String(text).replace(/\r/g, '');
+  const startAt = Math.max(all.search(/Knowledge Areas and Objectives/i), 0);
+  const lines = all.slice(startAt).split('\n').map(function (l) { return l.replace(/\s+/g, ' ').trim(); }).filter(String);
+  const re = /^(.*?)\s*\(\s*(\d{1,3})\s*(?:test\s*)?(?:items?|questions?)\s*\)\s*$/i;
+  const topics = [];
+  let current = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(re);
+    if (m) {
+      let name = m[1].replace(/^[\d.\-•▪●\s]+/, '').trim();
+      if (!name && i > 0) name = lines[i - 1];
+      if (name.length >= 3 && name.length <= 120) {
+        current = { name: name, items: Number(m[2]), obj: [] };
+        topics.push(current);
+        continue;
+      }
+    }
+    if (current && current.obj.join(' ').length < 1100 && !/^page \d+|competitive events guidelines|^©/i.test(lines[i])) {
+      current.obj.push(lines[i].replace(/^[\d.\-•▪●o\s]+(?=\S)/, ''));
+    }
+  }
+  const total = topics.reduce(function (n, t) { return n + t.items; }, 0);
+  if (topics.length < 2 || total < 20 || total > 200) return { topics: [], questions: 0 };
+  const qm = all.match(/(\d{2,3})[\s-]*(?:multiple[\s-]*choice|question)/i);
+  return {
+    topics: topics.map(function (t) { return { name: t.name, items: t.items, summary: t.obj.join('; ').slice(0, 1200) }; }),
+    questions: qm ? Number(qm[1]) : total,
+  };
 }
 
 function saveNote(ev, note) {
@@ -1213,7 +1414,7 @@ function adminReloadTopics(eventId) {
 
 /** Runs on a timer. Writes questions for whichever topic has the fewest, until every topic reaches BANK_TARGET. */
 function topUpBanks() {
-  if (!prop('GEMINI_API_KEY', '')) return;
+  if (!aiProvider()) return;
   if (CacheService.getScriptCache().get('admin_loading')) return; // an officer is loading tests right now
   const target = num('BANK_TARGET', 30);
   const batches = num('TOPUP_BATCHES_PER_RUN', 2);
@@ -1267,6 +1468,6 @@ function setup() {
 
 /** Run from the editor to check the AI connection. Writes nothing. */
 function testAi() {
-  const out = gemini('Reply with JSON: {"ok": true, "model": "<your model name>"}', null, 0);
-  console.log(JSON.stringify(out));
+  const out = aiCall('Reply with JSON: {"ok": true, "model": "<your model name>"}', null, 0);
+  console.log('Using ' + aiModelLabel() + ': ' + JSON.stringify(out));
 }

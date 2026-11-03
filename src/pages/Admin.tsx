@@ -198,7 +198,7 @@ export function Admin() {
   return (
     <div className="animate-rise">
       <PageHead title="Admin" sub="Set up events and topics, keep the question bank full, and review questions members reported." />
-      {!ov.aiReady && <div className="mb-6"><Notice tone="bad">The AI isn’t connected. Add GEMINI_API_KEY in the Apps Script project’s Script properties.</Notice></div>}
+      {!ov.aiReady && <div className="mb-6"><Notice tone="bad">The AI isn’t connected. Add GROQ_API_KEY (or XAI_API_KEY or GEMINI_API_KEY) in the Apps Script project’s Script properties.</Notice></div>}
       {ov.aiReady && <p className="mb-6 text-[14px] text-ink-2">AI model: <b>{ov.model}</b>. Bank target: {ov.target} questions per topic.</p>}
 
       <section className="cut bg-navy-900 p-6 text-white">

@@ -5,7 +5,7 @@ FBLA Prep is a separate website from the chapter site. It has two parts:
 - **Website** (this folder): React, TypeScript, Tailwind v4, and Vite, the same stack as the chapter site. It's hosted on GitHub Pages at `https://southbrunswickfbla.github.io/prep/`, which works on the school network.
 - **Backend** (`backend/Code.gs`): a Google Apps Script attached to a new Google Sheet. It checks Google sign-ins, has the AI write questions, grades practice, and stores progress. It runs on script.google.com, which the school network allows.
 
-Everything is free. The AI is Google's Gemini API on its free tier.
+Everything is free. The AI can be Groq (the default), xAI Grok, or Google Gemini, each on its free tier. Set whichever key you have.
 
 ## 1. Make the data sheet and backend
 
@@ -17,16 +17,16 @@ Everything is free. The AI is Google's Gemini API on its free tier.
    |---|---|
    | `GOOGLE_CLIENT_ID` | The same OAuth client ID as the chapter site (`GOOGLE_SIGNIN_CLIENT_ID` on Render) |
    | `ADMIN_EMAILS` | Officer school emails, separated by commas |
-   | `GEMINI_API_KEY` | From step 4 |
+   | `GROQ_API_KEY` | From step 4 (or use `XAI_API_KEY` with `XAI_MODEL`, or `GEMINI_API_KEY`) |
    | `MEMBER_SHEET_ID` | `1M5ZWCouy9Kfr7amoa2pBv2xVW4rWDECjbcsACtrgH6s` (optional: only members can sign in) |
    | `MEMBER_SHEET_TAB` | `Attendance` |
 
-   Optional: `GEMINI_MODEL` (default `gemini-flash-latest`), `BANK_TARGET` (default 30 questions per topic), `FULL_TEST_SIZE` (100), `FULL_TEST_MINUTES` (50).
+   Optional: `GROQ_MODEL` (default `openai/gpt-oss-120b`, falling back to `openai/gpt-oss-20b`), `AI_PROVIDER` (`groq`, `xai`, or `gemini`, if more than one key is set), `BANK_TARGET` (default 30 questions per topic), `FULL_TEST_SIZE` (100), `FULL_TEST_MINUTES` (50).
 
-4. **Get the Gemini API key.** Google requires the account holder to be 18 or older, so an adviser or parent does this part. Go to **aistudio.google.com → Get API key → Create API key**, and copy the key into `GEMINI_API_KEY`. No credit card is needed.
-   - On the free tier, Google may use what's sent to improve its products. The backend only ever sends event names, topics, and questions, never names, emails, or student IDs.
+4. **Get an AI key.** The default is Groq: an adult makes a free account at **console.groq.com**, opens **API Keys → Create API Key**, and copies the key into `GROQ_API_KEY`. The backend only ever sends event names, topics, and questions, never names, emails, or student IDs.
+   - **Turn on the Drive API service** too: in the Apps Script editor, click **Services (+)** on the left, pick **Drive API**, and click **Add**. FBLA Prep uses it to turn each event's guidelines PDF into text, so it can read the knowledge areas and question counts without using AI.
 5. In the Apps Script editor, pick **setup** from the function menu and click **Run**. Approve the permissions. This creates the tabs and starts a timer that writes questions every 10 minutes.
-6. Pick **testAi** and click **Run**. The log should show `{"ok":true,...}`. If it says the model wasn't found, set `GEMINI_MODEL` to a model listed as free in AI Studio.
+6. Pick **testAi** and click **Run**. The log should start with `Using Groq: openai/gpt-oss-120b` and show `{"ok":true,...}`. If it says the model isn't available, set `GROQ_MODEL` to a model listed in the Groq console.
 7. Click **Deploy → New deployment → Web app**. Set **Execute as: Me** and **Who has access: Anyone**, then deploy and copy the URL ending in `/exec`.
    - "Anyone" only lets the website reach the script. Every request still needs a valid school Google sign-in.
    - **When you change Code.gs later:** Deploy → Manage deployments → edit (pencil) → Version: **New version** → Deploy. The URL stays the same.
