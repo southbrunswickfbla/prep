@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, errorText } from '../lib/api';
 import { useData } from '../lib/data';
 import { LETTERS, plural } from '../lib/format';
-import { btn, Loading, Notice, PageHead } from '../components/Layout';
+import { btn, External, Loading, Notice, PageHead } from '../components/Layout';
 import type { AdminOverview, EventSummary, Topic } from '../types';
 
 const input = 'cut-sm w-full bg-paper px-3 py-2.5 text-[15px] outline-none inset-ring-1 inset-ring-line focus:inset-ring-2 focus:inset-ring-gold';
@@ -41,13 +41,28 @@ function EventEditor({ ev, target, onChanged }: { ev: EventSummary; target: numb
 
       {open && (
         <div className="border-t border-line px-5 pb-6 pt-5">
+          {ev.note && <div className="mb-4"><Notice tone={/^(Check|Couldn)/.test(ev.note) ? 'bad' : 'info'}>{ev.note}</Notice></div>}
+          {ev.guide && (
+            <div className="mb-5 flex flex-wrap items-center gap-3">
+              <External href={ev.guide} className={btn.link}>Official 2026–27 guidelines</External>
+              <button className={btn.quiet} disabled={!!busy} onClick={() => {
+                if (ev.topics.length && !window.confirm(`Replace ${ev.name}’s topics with the ones in the official guidelines?`)) return;
+                void run('reload', async () => {
+                  const r = await api.admin.reloadTopics(ev.id);
+                  setTopics(r.topics);
+                  await onChanged();
+                  return `Loaded ${plural(r.topics.length, 'topic')} from the guidelines.`;
+                });
+              }}>{busy === 'reload' ? 'Reading the guidelines…' : ev.topics.length ? 'Reload from the guidelines' : 'Load from the guidelines'}</button>
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="grid gap-1 text-[13px] font-bold text-ink-2">Event name<input className={input} value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="grid gap-1 text-[13px] font-bold text-ink-2">Career cluster<input className={input} value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Finance, Digital Technology…" /></label>
           </div>
 
-          <h3 className="mt-6 font-semiwide text-[16px] font-extrabold text-navy-950">Topics from the test composition</h3>
-          <p className="text-[14px] text-ink-2">Weights should add up to 100. They decide how a full practice test is split.</p>
+          <h3 className="mt-6 font-semiwide text-[16px] font-extrabold text-navy-950">Topics (knowledge areas)</h3>
+          <p className="text-[14px] text-ink-2">Weights should add up to 100. They decide how a full practice test is split, matching the real test’s question counts.</p>
           <div className="mt-3 grid gap-2">
             {topics.map((t, i) => (
               <div key={i} className="grid gap-2 sm:grid-cols-[1.2fr_90px_1.6fr_auto]">
@@ -124,6 +139,29 @@ export function Admin() {
   const [error, setError] = useState('');
   const [names, setNames] = useState('');
   const [busy, setBusy] = useState('');
+  const [fbla, setFbla] = useState<{ running: boolean; loaded: number; remaining: number | null; failed: { name: string; error: string }[]; error: string } | null>(null);
+
+  async function loadAll() {
+    const skip: string[] = [];
+    let loaded = 0;
+    let failed: { id: string; name: string; error: string }[] = [];
+    setFbla({ running: true, loaded: 0, remaining: null, failed: [], error: '' });
+    try {
+      for (let round = 0; round < 40; round++) {
+        const r = await api.admin.loadFbla(skip);
+        loaded += r.loaded.length;
+        failed = failed.concat(r.failed);
+        skip.push(...r.failed.map((f) => f.id));
+        const stop = r.remaining === 0 || (r.loaded.length === 0 && r.failed.length === 0) || r.failed.some((f) => /limit/i.test(f.error));
+        setFbla({ running: !stop, loaded, remaining: r.remaining, failed, error: '' });
+        await load();
+        if (stop) break;
+      }
+    } catch (e) {
+      setFbla({ running: false, loaded, remaining: null, failed, error: errorText(e) });
+    }
+    void refresh();
+  }
 
   const load = useCallback(async () => {
     try { setOv(await api.admin.overview()); setError(''); } catch (e) { setError(errorText(e)); }
@@ -141,10 +179,38 @@ export function Admin() {
       {!ov.aiReady && <div className="mb-6"><Notice tone="bad">The AI isn’t connected. Add GEMINI_API_KEY in the Apps Script project’s Script properties.</Notice></div>}
       {ov.aiReady && <p className="mb-6 text-[14px] text-ink-2">AI model: <b>{ov.model}</b>. Bank target: {ov.target} questions per topic.</p>}
 
-      <section className="cut bg-white p-6">
-        <h2 className="font-semiwide text-xl font-extrabold text-navy-950">Add events</h2>
-        <p className="mt-1 text-[14px] text-ink-2">One event name per line, spelled like the chapter site’s competitions list. Then open each one below and add its topics.</p>
-        <textarea className={`${input} mt-3 min-h-28`} value={names} onChange={(e) => setNames(e.target.value)} placeholder={'Accounting\nBusiness Law\nPersonal Finance'} />
+      <section className="cut bg-navy-900 p-6 text-white">
+        <h2 className="font-semiwide text-xl font-extrabold text-gold">FBLA 2026–27 tests</h2>
+        <p className="mt-1 max-w-[70ch] text-[15px] text-navy-100">
+          Adds all 45 events that have an objective test (31 objective tests, 12 role plays, Business Ethics, and Future Business Leader).
+          The AI reads each one’s official guidelines and saves its knowledge areas and question counts. Then questions start writing on their own.
+        </p>
+        <p className="mt-3 text-[14px] font-bold text-gold-300">
+          {ov.events.filter((e) => e.guide && e.topics.length).length} of {ov.events.filter((e) => e.guide).length || 45} tests have their topics.
+        </p>
+        <button className={`${btn.gold} mt-4`} disabled={!!fbla?.running} onClick={() => void loadAll()}>
+          {fbla?.running ? 'Reading the guidelines…' : 'Load all tests from the guidelines'}
+        </button>
+        {fbla && (
+          <div className="mt-4 grid gap-2">
+            <Notice tone={fbla.error ? 'bad' : 'gold'}>
+              {fbla.error || (fbla.running
+                ? `Read ${plural(fbla.loaded, 'event')} so far${fbla.remaining !== null ? `, ${fbla.remaining} to go` : ''}. This takes about 15 seconds per event. Keep this page open.`
+                : `Done. Read ${plural(fbla.loaded, 'event')}.${fbla.remaining ? ` ${fbla.remaining} still need topics; the timer will keep going in the background, or click the button again.` : ''}`)}
+            </Notice>
+            {fbla.failed.length > 0 && (
+              <Notice tone="bad">
+                {fbla.failed.map((f) => `${f.name}: ${f.error}`).join(' ')} Open those events below to try again or add topics by hand.
+              </Notice>
+            )}
+          </div>
+        )}
+      </section>
+
+      <section className="cut mt-6 bg-white p-6">
+        <h2 className="font-semiwide text-xl font-extrabold text-navy-950">Add other events</h2>
+        <p className="mt-1 text-[14px] text-ink-2">Only needed for events that aren’t one of the 45 above. One name per line, then open each one below and add its topics.</p>
+        <textarea className={`${input} mt-3 min-h-28`} value={names} onChange={(e) => setNames(e.target.value)} placeholder={'Event name'} />
         <button className={`${btn.navy} mt-3`} disabled={!!busy || !names.trim()} onClick={async () => {
           setBusy('add');
           try { const r = await api.admin.addEvents(names.split('\n').map((s) => s.trim()).filter(Boolean)); setNames(''); await changed(); setError(r.added ? '' : 'Those events already exist.'); }

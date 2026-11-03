@@ -1,4 +1,4 @@
-export type Topic = { name: string; weight: number; objectives?: string };
+export type Topic = { name: string; weight: number; objectives?: string; /** Questions on the real test, from the guidelines. */ items?: number };
 
 export type EventSummary = {
   id: string;
@@ -7,6 +7,10 @@ export type EventSummary = {
   topics: Topic[];
   bank: number;
   bankByTopic: Record<string, number>;
+  /** Link to the official 2026–27 guidelines PDF. */
+  guide?: string;
+  /** Status from loading the guidelines, shown to officers. */
+  note?: string;
 };
 
 export type Me = { email: string; name: string; picture: string; admin: boolean; staff: boolean };

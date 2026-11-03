@@ -66,6 +66,9 @@ export const api = {
       call<{ added: number }>('generate', { eventId, topic, count }),
     setQuestionStatus: (id: string, status: 'active' | 'hidden' | 'deleted') =>
       call<{ saved: boolean }>('setQuestionStatus', { id, status }),
+    loadFbla: (skip: string[]) =>
+      call<{ added: number; loaded: string[]; failed: { id: string; name: string; error: string }[]; remaining: number }>('loadFbla', { skip }),
+    reloadTopics: (eventId: string) => call<{ topics: Topic[]; note: string }>('reloadTopics', { eventId }),
   },
 };
 

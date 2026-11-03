@@ -30,7 +30,7 @@ const VERSION = 'v1';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 
 const TABS = {
-  Events:    ['id', 'name', 'category', 'topics', 'active', 'updated'],
+  Events:    ['id', 'name', 'category', 'topics', 'active', 'updated', 'guide', 'note'],
   Questions: ['id', 'eventId', 'topic', 'difficulty', 'stem', 'choices', 'answer', 'explanation', 'flags', 'status', 'created', 'source'],
   Stats:     ['email', 'eventId', 'topic', 'attempts', 'correct', 'seen', 'updated'],
   Sessions:  ['id', 'email', 'eventId', 'eventName', 'mode', 'total', 'correct', 'pct', 'seconds', 'started', 'submitted', 'detail'],
@@ -82,6 +82,8 @@ function route(action, b, user) {
     case 'suggestTopics': return suggestTopics(String(b.name || ''), String(b.guideText || ''));
     case 'generate': return adminGenerate(String(b.eventId || ''), String(b.topic || ''), Number(b.count) || 10);
     case 'setQuestionStatus': return setQuestionStatus(String(b.id || ''), String(b.status || ''));
+    case 'loadFbla': return adminLoadFbla(Array.isArray(b.skip) ? b.skip.map(String) : []);
+    case 'reloadTopics': return adminReloadTopics(String(b.eventId || ''));
   }
   throw fail('bad_request', 'Unknown action.');
 }
@@ -259,15 +261,25 @@ function slug(s) { return norm(s).replace(/ /g, '-').slice(0, 60) || 'event'; }
 
 function parseTopics(v) {
   return jsonArr(v).filter(function (t) { return t && t.name; }).map(function (t) {
-    return { name: String(t.name), weight: Number(t.weight) || 0, objectives: String(t.objectives || '') };
+    const o = { name: String(t.name), weight: Number(t.weight) || 0, objectives: String(t.objectives || '') };
+    if (Number(t.items) > 0) o.items = Number(t.items);
+    return o;
   });
 }
 function readEvents(includeInactive) {
   return readAll('Events').filter(function (e) {
     return e.id && (includeInactive || String(e.active).toUpperCase() !== 'FALSE');
   }).map(function (e) {
-    return { id: String(e.id), name: String(e.name), category: String(e.category || ''), topics: parseTopics(e.topics), _row: e._row, active: e.active };
+    return {
+      id: String(e.id), name: String(e.name), category: String(e.category || ''), topics: parseTopics(e.topics),
+      guide: String(e.guide || ''), note: String(e.note || ''), _row: e._row, active: e.active,
+    };
   });
+}
+function eventRow(e, changes) {
+  const o = { id: e.id, name: e.name, category: e.category, topics: JSON.stringify(e.topics), active: e.active === false || String(e.active).toUpperCase() === 'FALSE' ? false : true, updated: nowIso(), guide: e.guide || '', note: e.note || '' };
+  Object.keys(changes || {}).forEach(function (k) { o[k] = changes[k]; });
+  return o;
 }
 function qFromRow(r) {
   return {
@@ -291,7 +303,7 @@ function eventSummaries(events) {
       bankByTopic[t.name] = n;
       bank += n;
     });
-    return { id: e.id, name: e.name, category: e.category, topics: e.topics, bank: bank, bankByTopic: bankByTopic };
+    return { id: e.id, name: e.name, category: e.category, topics: e.topics, bank: bank, bankByTopic: bankByTopic, guide: e.guide, note: e.note };
   });
 }
 
@@ -412,7 +424,7 @@ function startSession(user, eventId, mode, topic) {
     shuffled(bank.filter(function (q) { return !used[q.id] && names.indexOf(q.topic) >= 0; }))
       .slice(0, size - chosen.length).forEach(function (q) { chosen.push(q); });
   }
-  if (!chosen.length) throw fail('not_ready', 'No questions are ready for this event yet. Try again in a few minutes.');
+  if (!chosen.length) throw fail('not_ready', mode === 'full' ? 'Questions for this event are still being written. Try a quick drill, which writes new ones on the spot.' : 'No questions are ready for this event yet. Try again in a few minutes.');
   chosen = shuffled(chosen);
 
   const sessionId = 's' + Utilities.getUuid().replace(/-/g, '').slice(0, 14);
@@ -537,7 +549,7 @@ function flagQuestion(user, questionId, reason) {
 
 /* ====================== AI ====================== */
 
-function gemini(prompt, schema, temperature) {
+function gemini(input, schema, temperature) {
   const key = prop('GEMINI_API_KEY', '');
   if (!key) throw fail('ai', 'The AI isn’t connected yet. An officer needs to add the Gemini API key.');
   const model = prop('GEMINI_MODEL', DEFAULT_MODEL);
@@ -549,7 +561,7 @@ function gemini(prompt, schema, temperature) {
     const res = UrlFetchApp.fetch(url, {
       method: 'post', contentType: 'application/json', muteHttpExceptions: true,
       headers: { 'x-goog-api-key': key },
-      payload: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: config }),
+      payload: JSON.stringify({ contents: [{ role: 'user', parts: typeof input === 'string' ? [{ text: input }] : input }], generationConfig: config }),
     });
     const code = res.getResponseCode();
     const text = res.getContentText();
@@ -690,7 +702,7 @@ function addEvents(names) {
       const ex = taken[norm(name)];
       if (ex) {
         if (String(ex.active).toUpperCase() === 'FALSE') {
-          writeRow('Events', ex._row, { id: ex.id, name: ex.name, category: ex.category, topics: JSON.stringify(ex.topics), active: true, updated: nowIso() });
+          writeRow('Events', ex._row, eventRow(ex, { active: true }));
           revived++;
         }
         return;
@@ -699,7 +711,7 @@ function addEvents(names) {
       while (ids[id]) id = slug(name) + '-' + i++;
       ids[id] = true;
       taken[norm(name)] = { id: id };
-      rows.push({ id: id, name: name, category: '', topics: '[]', active: true, updated: nowIso() });
+      rows.push({ id: id, name: name, category: '', topics: '[]', active: true, updated: nowIso(), guide: '', note: '' });
     });
     appendRows('Events', rows);
     return { added: rows.length + revived };
@@ -708,7 +720,9 @@ function addEvents(names) {
 
 function cleanTopics(topics) {
   const out = (Array.isArray(topics) ? topics : []).filter(function (t) { return t && String(t.name || '').trim(); }).slice(0, 30).map(function (t) {
-    return { name: String(t.name).trim().slice(0, 120), weight: Math.max(0, Math.min(100, Math.round(Number(t.weight) || 0))), objectives: String(t.objectives || '').trim().slice(0, 1500) };
+    const o = { name: String(t.name).trim().slice(0, 120), weight: Math.max(0, Math.min(100, Math.round(Number(t.weight) || 0))), objectives: String(t.objectives || '').trim().slice(0, 1500) };
+    if (Number(t.items) > 0) o.items = Math.round(Number(t.items));
+    return o;
   });
   const seen = {};
   return out.filter(function (t) { const k = norm(t.name); if (seen[k]) return false; seen[k] = true; return true; });
@@ -720,10 +734,10 @@ function saveEvent(ev) {
   return withLock(function () {
     const ex = readEvents(true).filter(function (e) { return e.id === ev.id; })[0];
     if (!ex) throw fail('not_found', 'That event no longer exists.');
-    writeRow('Events', ex._row, {
-      id: ex.id, name: name, category: String(ev.category || '').trim(), topics: JSON.stringify(cleanTopics(ev.topics)),
-      active: ev.active === false ? false : true, updated: nowIso(),
-    });
+    writeRow('Events', ex._row, eventRow(ex, {
+      name: name, category: String(ev.category || '').trim(), topics: JSON.stringify(cleanTopics(ev.topics)),
+      active: ev.active === false ? false : true, note: '',
+    }));
     return { saved: true };
   });
 }
@@ -732,7 +746,7 @@ function deleteEvent(id) {
   return withLock(function () {
     const ex = readEvents(true).filter(function (e) { return e.id === id; })[0];
     if (!ex) throw fail('not_found', 'That event no longer exists.');
-    writeRow('Events', ex._row, { id: ex.id, name: ex.name, category: ex.category, topics: JSON.stringify(ex.topics), active: false, updated: nowIso() });
+    writeRow('Events', ex._row, eventRow(ex, { active: false }));
     return { deleted: true };
   });
 }
@@ -793,6 +807,195 @@ function setQuestionStatus(id, status) {
   });
 }
 
+/* ====================== FBLA 2026–27 tests ====================== */
+
+/*
+ * Every 2026–27 high school event with an objective test: the 31 objective tests, the 12 role plays
+ * (their test round), and the two presentation events that include a test. Guideline paths match the
+ * chapter site's competitiveEvents.ts. To update for a new year, edit this list.
+ */
+const GUIDE_BASE = 'https://greektrack-fbla-public.s3.us-east-1.amazonaws.com/files/1/High%20School%20Competitive%20Events%20Resources/Individual%20Guidelines/';
+const GUIDE_BASE_ALT = 'https://connect.fbla.org/headquarters/files/High%20School%20Competitive%20Events%20Resources/Individual%20Guidelines/';
+const FBLA_TESTS = [
+  ['Accounting', 'Objective tests', 'Objective%20Tests/Accounting.pdf'],
+  ['Advanced Accounting', 'Objective tests', 'Objective%20Tests/Advanced-Accounting.pdf'],
+  ['Advertising', 'Objective tests', 'Objective%20Tests/Advertising.pdf'],
+  ['Agribusiness', 'Objective tests', 'Objective%20Tests/Agribusiness.pdf'],
+  ['Business Communication', 'Objective tests', 'Objective%20Tests/Business-Communication.pdf'],
+  ['Business Law', 'Objective tests', 'Objective%20Tests/Business-Law.pdf'],
+  ['Computer Problem Solving', 'Objective tests', 'Objective%20Tests/Computer-Problem-Solving.pdf'],
+  ['Cybersecurity', 'Objective tests', 'Objective%20Tests/Cybersecurity.pdf'],
+  ['Data Science & AI', 'Objective tests', 'Objective%20Tests/Data-Science-and-AI.pdf'],
+  ['Economics', 'Objective tests', 'Objective%20Tests/Economics.pdf'],
+  ['Healthcare Administration', 'Objective tests', 'Objective%20Tests/Healthcare-Administration.pdf'],
+  ['Human Resource Management', 'Objective tests', 'Objective%20Tests/Human-Resource-Management.pdf'],
+  ['Insurance & Risk Management', 'Objective tests', 'Objective%20Tests/Insurance-and-Risk-Management.pdf'],
+  ['Journalism', 'Objective tests', 'Objective%20Tests/Journalism.pdf'],
+  ['Networking Infrastructures', 'Objective tests', 'Objective%20Tests/Networking-Infrastructures.pdf'],
+  ['Organizational Leadership', 'Objective tests', 'Objective%20Tests/Organizational-Leadership.pdf'],
+  ['Personal Finance', 'Objective tests', 'Objective%20Tests/Personal-Finance.pdf'],
+  ['Project Management', 'Objective tests', 'Objective%20Tests/Project-Management.pdf'],
+  ['Public Administration & Management', 'Objective tests', 'Objective%20Tests/Public-Administration-and-Management.pdf'],
+  ['Real Estate', 'Objective tests', 'Objective%20Tests/Real-Estate.pdf'],
+  ['Retail Management', 'Objective tests', 'Objective%20Tests/Retail-Management.pdf'],
+  ['Securities & Investments', 'Objective tests', 'Objective%20Tests/Securities-and-Investments.pdf'],
+  ['Introduction to Business Communication', '9th & 10th grade tests', 'Objective%20Tests/Introduction-to-Business-Communication.pdf'],
+  ['Introduction to Business Concepts', '9th & 10th grade tests', 'Objective%20Tests/Introduction-to-Business-Concepts.pdf'],
+  ['Introduction to Business Procedures', '9th & 10th grade tests', 'Objective%20Tests/Introduction-to-Business-Procedures.pdf'],
+  ['Introduction to FBLA', '9th & 10th grade tests', 'Objective%20Tests/Introduction-to-FBLA.pdf'],
+  ['Introduction to Information Technology', '9th & 10th grade tests', 'Objective%20Tests/Introduction-to-Information-Technology.pdf'],
+  ['Introduction to Marketing Concepts', '9th & 10th grade tests', 'Objective%20Tests/Introduction-to-Marketing-Concepts.pdf'],
+  ['Introduction to Parliamentary Procedure', '9th & 10th grade tests', 'Objective%20Tests/Introduction-to-Parliamentary-Procedure.pdf'],
+  ['Introduction to Retail & Merchandising', '9th & 10th grade tests', 'Objective%20Tests/Introduction-to-Retail-and-Merchandising.pdf'],
+  ['Introduction to Supply Chain Management', '9th & 10th grade tests', 'Objective%20Tests/Introduction-to-Supply-Chain-Management.pdf'],
+  ['Banking & Financial Systems', 'Role play tests', 'Role%20Play%20Events/Banking-and-Financial-Systems.pdf'],
+  ['Business Management', 'Role play tests', 'Role%20Play%20Events/Business-Management.pdf'],
+  ['Customer Service', 'Role play tests', 'Role%20Play%20Events/Customer-Service.pdf'],
+  ['Entrepreneurship', 'Role play tests', 'Role%20Play%20Events/Entrepreneurship.pdf'],
+  ['Hospitality & Event Management', 'Role play tests', 'Role%20Play%20Events/Hospitality-and-Event-Management.pdf'],
+  ['International Business', 'Role play tests', 'Role%20Play%20Events/International-Business.pdf'],
+  ['Management Information Systems', 'Role play tests', 'Role%20Play%20Events/Management-Information-Systems.pdf'],
+  ['Marketing', 'Role play tests', 'Role%20Play%20Events/Marketing.pdf'],
+  ['Network Design', 'Role play tests', 'Role%20Play%20Events/Network-Design.pdf'],
+  ['Parliamentary Procedure', 'Role play tests', 'Role%20Play%20Events/Parliamentary-Procedure.pdf'],
+  ['Sports & Entertainment Management', 'Role play tests', 'Role%20Play%20Events/Sports-and-Entertainment-Management.pdf'],
+  ['Technology Support & Services', 'Role play tests', 'Role%20Play%20Events/Technology-Support-and-Services.pdf'],
+  ['Business Ethics', 'Presentation events with a test', 'Presentation%20Events/Business-Ethics.pdf'],
+  ['Future Business Leader', 'Presentation events with a test', 'Presentation%20Events/Future-Business-Leader.pdf'],
+];
+
+/** Adds any FBLA test that isn't in the Events tab yet, and fills in missing guideline links. */
+function seedFblaTests() {
+  return withLock(function () {
+    const all = readEvents(true);
+    const byName = {}, ids = {};
+    all.forEach(function (e) { byName[norm(e.name)] = e; ids[e.id] = true; });
+    const rows = [];
+    let linked = 0;
+    FBLA_TESTS.forEach(function (t) {
+      const guide = GUIDE_BASE + t[2];
+      const ex = byName[norm(t[0])];
+      if (ex) {
+        if (!ex.guide || !ex.category) {
+          writeRow('Events', ex._row, eventRow(ex, { guide: ex.guide || guide, category: ex.category || t[1] }));
+          linked++;
+        }
+        return;
+      }
+      let id = slug(t[0]), i = 2;
+      while (ids[id]) id = slug(t[0]) + '-' + i++;
+      ids[id] = true;
+      rows.push({ id: id, name: t[0], category: t[1], topics: '[]', active: true, updated: nowIso(), guide: guide, note: '' });
+    });
+    appendRows('Events', rows);
+    return { added: rows.length, linked: linked };
+  });
+}
+
+function fetchGuidePdf(guide) {
+  const urls = [guide];
+  if (guide.indexOf(GUIDE_BASE) === 0) urls.push(GUIDE_BASE_ALT + guide.slice(GUIDE_BASE.length));
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      const res = UrlFetchApp.fetch(urls[i], { muteHttpExceptions: true, followRedirects: true });
+      if (res.getResponseCode() !== 200) continue;
+      const blob = res.getBlob();
+      const head = Utilities.newBlob(blob.getBytes().slice(0, 5)).getDataAsString();
+      if (head === '%PDF-') return blob;
+    } catch (_) { /* try the next address */ }
+  }
+  throw fail('guide', 'Couldn’t download the official guidelines for this event.');
+}
+
+/** Has the AI read an event's official guidelines PDF and saves its knowledge areas and test-item counts as topics. */
+function loadGuideTopics(ev) {
+  if (!ev.guide) throw fail('guide', 'This event has no guidelines link.');
+  let blob;
+  try { blob = fetchGuidePdf(ev.guide); }
+  catch (err) { saveNote(ev, 'Couldn’t download the guidelines. Check the link, then try again.'); throw err; }
+
+  const prompt = [
+    'This PDF is the official FBLA (Future Business Leaders of America) 2026–27 competitive event guidelines for "' + ev.name + '".',
+    'Find the objective test’s study guide (the section titled "Study Guide: Knowledge Areas and Objectives").',
+    'Return every knowledge area exactly as the guidelines name it, the number of test items shown next to it in parentheses, and a summary of its objectives in your own words (under 300 characters).',
+    'Also return the total number of test questions from "Event Elements". If the event has no objective test, return an empty topics list.',
+  ].join('\n');
+  const schema = {
+    type: 'OBJECT',
+    properties: {
+      topics: {
+        type: 'ARRAY',
+        items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, items: { type: 'INTEGER' }, summary: { type: 'STRING' } }, required: ['name', 'items', 'summary'] },
+      },
+      questions: { type: 'INTEGER' },
+    },
+    required: ['topics'],
+  };
+  const out = gemini([
+    { inline_data: { mime_type: 'application/pdf', data: Utilities.base64Encode(blob.getBytes()) } },
+    { text: prompt },
+  ], schema, 0);
+
+  const raw = (out && Array.isArray(out.topics) ? out.topics : []).filter(function (t) { return t && String(t.name || '').trim(); });
+  if (!raw.length) {
+    saveNote(ev, 'Couldn’t find test topics in the guidelines. Add them by hand.');
+    throw fail('guide', 'No test topics were found in the guidelines for ' + ev.name + '.');
+  }
+  const total = raw.reduce(function (n, t) { return n + Math.max(0, Math.round(Number(t.items) || 0)); }, 0);
+  const topics = cleanTopics(raw.map(function (t) {
+    const items = Math.max(0, Math.round(Number(t.items) || 0));
+    return { name: t.name, items: items, weight: total ? (items / total) * 100 : 100 / raw.length, objectives: t.summary };
+  }));
+  // Make weights add up to exactly 100.
+  const sum = topics.reduce(function (n, t) { return n + t.weight; }, 0);
+  if (topics.length) topics[0].weight += 100 - sum;
+
+  const expected = Number(out.questions) || 100;
+  const note = total === expected ? 'Loaded from the 2026–27 guidelines.' : 'Check these: the test items add up to ' + total + ', but the guidelines say ' + expected + ' questions.';
+  withLock(function () {
+    const fresh = readEvents(true).filter(function (e) { return e.id === ev.id; })[0] || ev;
+    writeRow('Events', fresh._row, eventRow(fresh, { topics: JSON.stringify(topics), note: note }));
+  });
+  return { topics: topics, note: note };
+}
+
+function saveNote(ev, note) {
+  try {
+    withLock(function () {
+      const fresh = readEvents(true).filter(function (e) { return e.id === ev.id; })[0];
+      if (fresh) writeRow('Events', fresh._row, eventRow(fresh, { note: note }));
+    });
+  } catch (_) { /* a missing note isn't worth failing over */ }
+}
+
+/** Admin: add every FBLA test, then read guidelines for the ones without topics, about 45 seconds per call. */
+function adminLoadFbla(skip) {
+  const seeded = seedFblaTests();
+  const started = Date.now();
+  const loaded = [], failed = [];
+  const skipSet = {};
+  skip.forEach(function (id) { skipSet[id] = true; });
+  let todo = readEvents().filter(function (e) { return e.guide && !e.topics.length && !skipSet[e.id]; });
+  for (let i = 0; i < todo.length && Date.now() - started < 45000; i++) {
+    try { loadGuideTopics(todo[i]); loaded.push(todo[i].name); }
+    catch (err) {
+      failed.push({ id: todo[i].id, name: todo[i].name, error: err.appCode ? err.message : 'Something went wrong.' });
+      if (err.appCode === 'ai_limit') break;
+    }
+  }
+  const remaining = readEvents().filter(function (e) {
+    return e.guide && !e.topics.length && !skipSet[e.id] && !failed.some(function (f) { return f.id === e.id; });
+  }).length;
+  return { added: seeded.added, loaded: loaded, failed: failed, remaining: remaining };
+}
+
+function adminReloadTopics(eventId) {
+  const ev = readEvents(true).filter(function (e) { return e.id === eventId; })[0];
+  if (!ev) throw fail('not_found', 'That event no longer exists.');
+  const r = loadGuideTopics(ev);
+  return { topics: r.topics, note: r.note };
+}
+
 /* ====================== Background top-up and setup ====================== */
 
 /** Runs on a timer. Writes questions for whichever topic has the fewest, until every topic reaches BANK_TARGET. */
@@ -801,6 +1004,13 @@ function topUpBanks() {
   const target = num('BANK_TARGET', 30);
   const batches = num('TOPUP_BATCHES_PER_RUN', 2);
   const started = Date.now();
+  // First, read the official guidelines for any test that doesn't have topics yet (two per run).
+  const waiting = readEvents().filter(function (e) { return e.guide && !e.topics.length && e.note.indexOf('Couldn') !== 0; });
+  for (let i = 0; i < Math.min(2, waiting.length); i++) {
+    try { loadGuideTopics(waiting[i]); console.log('Loaded topics for ' + waiting[i].name); }
+    catch (err) { console.warn('Topics for ' + waiting[i].name + ' failed: ' + err.message); }
+  }
+  if (waiting.length) return;
   for (let i = 0; i < batches && Date.now() - started < 4 * 60 * 1000; i++) {
     const events = readEvents();
     const qs = readAll('Questions', 10).filter(function (r) { return r.status === 'active'; });
@@ -824,7 +1034,12 @@ function topUpBanks() {
 
 /** Run once from the editor: creates the tabs and starts the 10-minute top-up timer. */
 function setup() {
-  Object.keys(TABS).forEach(function (name) { sheet(name); });
+  Object.keys(TABS).forEach(function (name) {
+    const sh = sheet(name);
+    sh.getRange(1, 1, 1, TABS[name].length).setValues([TABS[name]]).setFontWeight('bold');
+  });
+  const seeded = seedFblaTests();
+  console.log('Added ' + seeded.added + ' FBLA tests to the Events tab. Their topics load from the official guidelines on the timer, or click "Load all tests" on the Admin page.');
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'topUpBanks') ScriptApp.deleteTrigger(t);
   });

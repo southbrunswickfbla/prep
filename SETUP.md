@@ -65,15 +65,18 @@ The IT approval for students under 18 that's still open for the chapter site app
 
 Because this repo deploys itself with GitHub's own Pages action, it doesn't use the `PAGES_DEPLOY_TOKEN` that's failing on the chapter site.
 
-## 4. Set up events (officers)
+## 4. Set up the tests (officers)
+
+All 45 events that have an objective test are built in: the 31 objective tests, the 12 role plays (their test round), Business Ethics, and Future Business Leader. Each one links to FBLA's official 2026–27 guidelines, the same ones every chapter uses.
 
 1. Sign in with an email listed in `ADMIN_EMAILS` and open **Admin**.
-2. Under **Add events**, paste the names of the tests members are taking at RCE, one per line.
-3. Open each event. Under **Fill in topics with AI**, paste the event's test composition and study guide section from this year's guidelines (linked on the chapter site's Competitions page), then click **Pull topics from this text**. Check the topics and weights, then click **Save event**.
-4. Questions fill in on their own. The timer writes up to 20 questions every 10 minutes, starting with whichever topic has the fewest. Drills also write questions on the spot when a topic runs low, and you can click **Write 10 more** for any topic.
-5. Members can report bad questions. After two reports a question is hidden until an officer restores or deletes it on the Admin page.
+2. Click **Load all tests from the guidelines** and keep the page open. The AI reads each event's guidelines and saves its knowledge areas with the number of questions each one has on the real test. It takes about 15 seconds per event, so roughly 10 to 15 minutes for all 45.
+3. If any event shows a red note, open it and click **Reload from the guidelines**, or type its topics by hand.
+4. Questions then start writing on their own: up to 20 every 10 minutes, starting with whichever topic has the fewest. Drills also write questions on the spot, and **Write 10 more** on any topic fills it right away.
 
-With 43 RCE tests and 5 to 10 topics each, filling every topic to 30 questions takes roughly 1,000 AI calls. At the timer's pace that's a few days, as long as the free daily limit holds, so set up the events with the most sign-ups first.
+You don't have to click the button at all: after `setup` runs, the 10-minute timer reads two events' guidelines per run, so all 45 are done in about 4 hours.
+
+Filling every topic to 30 questions takes roughly 1,000 AI calls. At the timer's pace that's a few days, as long as the free daily limit holds, so click **Write 10 more** for the tests with the most RCE sign-ups first.
 
 ## Try it locally
 

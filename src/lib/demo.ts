@@ -10,7 +10,7 @@ type Ev = { id: string; name: string; category: string; topics: Topic[] };
 
 const EVENTS: Ev[] = [
   {
-    id: 'intro-it', name: 'Introduction to Information Technology', category: 'Digital Technology',
+    id: 'intro-it', name: 'Introduction to Information Technology', category: '9th & 10th grade tests',
     topics: [
       { name: 'Hardware and devices', weight: 20 },
       { name: 'Networking and the internet', weight: 25 },
@@ -20,7 +20,7 @@ const EVENTS: Ev[] = [
     ],
   },
   {
-    id: 'personal-finance', name: 'Personal Finance', category: 'Finance',
+    id: 'personal-finance', name: 'Personal Finance', category: 'Objective tests',
     topics: [
       { name: 'Earning income', weight: 25 },
       { name: 'Banking and credit', weight: 25 },

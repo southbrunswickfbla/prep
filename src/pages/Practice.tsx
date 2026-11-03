@@ -19,7 +19,9 @@ export function EventList() {
   const query = q.trim().toLowerCase();
   const words = query.split(/\s+/).filter(Boolean);
   const list = data.events.filter((e) => words.every((w) => `${e.name} ${e.category}`.toLowerCase().includes(w)));
-  const groups = [...new Set(list.map((e) => e.category || 'Other'))].sort();
+  const ORDER = ['Objective tests', '9th & 10th grade tests', 'Role play tests', 'Presentation events with a test'];
+  const rank = (g: string) => (ORDER.indexOf(g) < 0 ? 99 : ORDER.indexOf(g));
+  const groups = [...new Set(list.map((e) => e.category || 'Other'))].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 
   return (
     <div className="animate-rise">
@@ -109,7 +111,7 @@ export function EventDetail() {
       <div className="mt-3">
         <PageHead
           title={event.name}
-          sub={<>{event.category}. Check this year’s official guidelines on the <External href={mainSite.competitions(event.name)} className={btn.link}>chapter site</External>.</>}
+          sub={<>{event.category}. Topics come from FBLA’s {event.guide ? <External href={event.guide} className={btn.link}>official 2026–27 guidelines</External> : 'official guidelines'}. Study links are on the <External href={mainSite.competitions(event.name)} className={btn.link}>chapter site</External>.</>}
         />
       </div>
 
@@ -139,7 +141,7 @@ export function EventDetail() {
       {ready && (
         <section className="mt-12">
           <h2 className="font-semiwide text-2xl font-extrabold text-navy-950">Topics</h2>
-          <p className="mt-1 text-ink-2">Weights come from the event’s test composition. Drill any topic on its own.</p>
+          <p className="mt-1 text-ink-2">The knowledge areas FBLA lists for this test. Drill any one on its own.</p>
           <div className="cut mt-4 divide-y divide-line bg-white">
             {event.topics.map((t) => {
               const m = topicMastery(data.mastery, event.id, t.name);
@@ -147,7 +149,7 @@ export function EventDetail() {
                 <div key={t.name} className="grid items-center gap-3 px-5 py-4 sm:grid-cols-[1fr_200px_auto]">
                   <div>
                     <div className="font-bold text-navy-950">{t.name}</div>
-                    <div className="text-[13px] text-ink-2">{t.weight ? `${t.weight}% of the test, ` : ''}{plural(event.bankByTopic[t.name] || 0, 'question')} written</div>
+                    <div className="text-[13px] text-ink-2">{t.items ? `${t.items} questions on the real test, ` : t.weight ? `${t.weight}% of the test, ` : ''}{plural(event.bankByTopic[t.name] || 0, 'practice question')} written</div>
                   </div>
                   <div className="flex items-center gap-3">
                     <Bar pct={m.pct} />
