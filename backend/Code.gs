@@ -1,5 +1,5 @@
 /**
- * SBHS FBLA Prep — backend (Google Apps Script), v2
+ * SBHS FBLA Prep — backend (Google Apps Script), v2.1
  *
  * Paste this into the Apps Script project attached to the "FBLA Prep Data" Google Sheet,
  * save, then run setup() once. Full steps are in SETUP.md.
@@ -24,9 +24,11 @@
  *  BANK_MAX_PER_TOPIC    default 120. Drills stop writing new questions for a topic once it has this many.
  *  FLAG_HIDE_AT          default 2 reports before a question is hidden.
  *  TOPUP_BATCHES_PER_RUN default 2 (each batch is one AI call of up to 10 questions).
+ *  GEMINI_FALLBACK_MODEL default "gemini-flash-lite-latest". Used when the main model stays overloaded. "none" turns it off.
+ *  AI_MIN_GAP_MS        default 6000. Minimum time between AI calls, to stay under the free per-minute limit.
  */
 
-const VERSION = 'v2';
+const VERSION = 'v2.1';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 
 const TABS = {
@@ -645,13 +647,33 @@ function flagQuestion(user, questionId, reason) {
 
 /* ====================== AI ====================== */
 
+/**
+ * Calls Gemini. Free-tier friendly: spaces calls out, waits through "overloaded" (503) replies,
+ * honors Google's retry delay on rate limits (429), and falls back to a lighter model when the main one stays busy.
+ */
 function gemini(input, schema, temperature) {
   const key = prop('GEMINI_API_KEY', '');
   if (!key) throw fail('ai', 'The AI isn’t connected yet. An officer needs to add the Gemini API key.');
-  const model = prop('GEMINI_MODEL', DEFAULT_MODEL);
+  const models = [prop('GEMINI_MODEL', DEFAULT_MODEL)];
+  const fallback = prop('GEMINI_FALLBACK_MODEL', 'gemini-flash-lite-latest');
+  if (fallback && fallback !== 'none' && fallback !== models[0]) models.push(fallback);
+  let lastBusy = null;
+  for (let m = 0; m < models.length; m++) {
+    try { return geminiOnce(key, models[m], input, schema, temperature, m > 0); }
+    catch (err) {
+      if (err.appCode === 'ai_busy' || err.appCode === 'ai_fallback_missing') { lastBusy = err; continue; }
+      throw err;
+    }
+  }
+  throw (lastBusy && lastBusy.appCode === 'ai_busy') ? lastBusy : fail('ai_busy', 'Google’s AI is overloaded right now. Try again in a few minutes.');
+}
+
+function geminiOnce(key, model, input, schema, temperature, isFallback) {
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
   let useSchema = !!schema;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const waits = [5000, 10000, 15000];
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
+    paceAi();
     const config = { temperature: temperature === undefined ? 0.7 : temperature, responseMimeType: 'application/json' };
     if (useSchema) config.responseSchema = schema;
     const res = UrlFetchApp.fetch(url, {
@@ -670,17 +692,48 @@ function gemini(input, schema, temperature) {
     }
     if (/API key not valid|API_KEY_INVALID/.test(text)) throw fail('ai', 'The Gemini API key was rejected. Check GEMINI_API_KEY.');
     if (code === 400 && useSchema) { useSchema = false; continue; }
+    if (code === 404 && isFallback) throw fail('ai_fallback_missing', 'Fallback model not found.');
     if (code === 429) {
-      if (attempt < 2) { Utilities.sleep(4000 * (attempt + 1)); continue; }
-      throw fail('ai_limit', 'The free AI limit is used up for now. Try again in a few minutes, or practice questions already written.');
+      const info = rateLimitInfo(text);
+      if (info.daily) throw fail('ai_limit', 'Today’s free AI limit is used up. It resets once a day, so try again tomorrow. Questions already written still work.');
+      if (attempt < 2) { Utilities.sleep(Math.min(info.delayMs || 15000, 40000)); continue; }
+      throw fail('ai_busy', 'Too many AI requests this minute. Wait a minute and try again.');
     }
-    if (code >= 500 && attempt < 2) { Utilities.sleep(2000 * (attempt + 1)); continue; }
+    if (code >= 500) {
+      if (attempt < waits.length) { Utilities.sleep(waits[attempt]); continue; }
+      throw fail('ai_busy', 'Google’s AI is overloaded right now. Try again in a few minutes.');
+    }
     console.error('Gemini error ' + code + ': ' + text.slice(0, 600));
     if (code === 401 || code === 403) throw fail('ai', 'The Gemini API key was rejected. Check GEMINI_API_KEY.');
     if (code === 404) throw fail('ai', 'The AI model "' + model + '" wasn’t found. Set GEMINI_MODEL to a model listed in AI Studio.');
     throw fail('ai', 'The AI service returned an error (' + code + '). Try again.');
   }
-  throw fail('ai', 'The AI service didn’t respond. Try again.');
+  throw fail('ai_busy', 'Google’s AI is overloaded right now. Try again in a few minutes.');
+}
+
+/** Keeps at least AI_MIN_GAP_MS (default 6 seconds) between AI calls, so the free per-minute limit isn't hit. */
+function paceAi() {
+  const gap = num('AI_MIN_GAP_MS', 6000);
+  const cache = CacheService.getScriptCache();
+  const last = Number(cache.get('ai_last')) || 0;
+  const wait = last + gap - Date.now();
+  if (wait > 0) Utilities.sleep(Math.min(wait, gap));
+  cache.put('ai_last', String(Date.now()), 120);
+}
+
+/** Reads Google's 429 reply: whether it's the daily quota, and how long Google asks us to wait. */
+function rateLimitInfo(text) {
+  let daily = false, delayMs = 0;
+  try {
+    const details = ((JSON.parse(text).error || {}).details) || [];
+    details.forEach(function (d) {
+      if (d.retryDelay) { const sec = parseFloat(String(d.retryDelay)); if (isFinite(sec)) delayMs = Math.round(sec * 1000) + 500; }
+      (d.violations || []).forEach(function (v) { if (/PerDay/i.test(String(v.quotaId || ''))) daily = true; });
+    });
+  } catch (_) {
+    daily = /per ?day|PerDay/i.test(text);
+  }
+  return { daily: daily, delayMs: delayMs };
 }
 
 function parseJsonLoose(s) {
@@ -1127,22 +1180,26 @@ function saveNote(ev, note) {
 /** Admin: add every FBLA test, then read guidelines for the ones without topics, about 45 seconds per call. */
 function adminLoadFbla(skip) {
   const seeded = seedFblaTests();
+  CacheService.getScriptCache().put('admin_loading', '1', 180); // the timer waits while an officer is loading
   const started = Date.now();
   const loaded = [], failed = [];
+  let busy = false, daily = false, message = '';
   const skipSet = {};
   skip.forEach(function (id) { skipSet[id] = true; });
-  let todo = readEvents().filter(function (e) { return e.guide && !e.topics.length && !skipSet[e.id]; });
-  for (let i = 0; i < todo.length && Date.now() - started < 45000; i++) {
+  const todo = readEvents().filter(function (e) { return e.guide && !e.topics.length && !skipSet[e.id]; });
+  for (let i = 0; i < todo.length && Date.now() - started < 40000; i++) {
     try { loadGuideTopics(todo[i]); loaded.push(todo[i].name); }
     catch (err) {
+      // Busy or rate-limited: stop this round without marking the event as failed, so it's tried again.
+      if (err.appCode === 'ai_busy') { busy = true; message = err.message; break; }
+      if (err.appCode === 'ai_limit') { daily = true; message = err.message; break; }
       failed.push({ id: todo[i].id, name: todo[i].name, error: err.appCode ? err.message : 'Something went wrong.' });
-      if (err.appCode === 'ai_limit') break;
     }
   }
   const remaining = readEvents().filter(function (e) {
     return e.guide && !e.topics.length && !skipSet[e.id] && !failed.some(function (f) { return f.id === e.id; });
   }).length;
-  return { added: seeded.added, loaded: loaded, failed: failed, remaining: remaining };
+  return { added: seeded.added, loaded: loaded, failed: failed, remaining: remaining, busy: busy, daily: daily, message: message };
 }
 
 function adminReloadTopics(eventId) {
@@ -1157,6 +1214,7 @@ function adminReloadTopics(eventId) {
 /** Runs on a timer. Writes questions for whichever topic has the fewest, until every topic reaches BANK_TARGET. */
 function topUpBanks() {
   if (!prop('GEMINI_API_KEY', '')) return;
+  if (CacheService.getScriptCache().get('admin_loading')) return; // an officer is loading tests right now
   const target = num('BANK_TARGET', 30);
   const batches = num('TOPUP_BATCHES_PER_RUN', 2);
   const started = Date.now();

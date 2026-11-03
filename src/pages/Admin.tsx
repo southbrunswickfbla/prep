@@ -139,20 +139,40 @@ export function Admin() {
   const [error, setError] = useState('');
   const [names, setNames] = useState('');
   const [busy, setBusy] = useState('');
-  const [fbla, setFbla] = useState<{ running: boolean; loaded: number; remaining: number | null; failed: { name: string; error: string }[]; error: string } | null>(null);
+  const [fbla, setFbla] = useState<{ running: boolean; loaded: number; remaining: number | null; failed: { name: string; error: string }[]; error: string; waiting?: string } | null>(null);
 
   async function loadAll() {
     const skip: string[] = [];
     let loaded = 0;
     let failed: { id: string; name: string; error: string }[] = [];
     setFbla({ running: true, loaded: 0, remaining: null, failed: [], error: '' });
+    let busyRounds = 0;
     try {
-      for (let round = 0; round < 40; round++) {
+      for (let round = 0; round < 80; round++) {
         const r = await api.admin.loadFbla(skip);
         loaded += r.loaded.length;
         failed = failed.concat(r.failed);
         skip.push(...r.failed.map((f) => f.id));
-        const stop = r.remaining === 0 || (r.loaded.length === 0 && r.failed.length === 0) || r.failed.some((f) => /limit/i.test(f.error));
+        if (r.daily) {
+          setFbla({ running: false, loaded, remaining: r.remaining, failed, error: (r.message || 'Today’s free AI limit is used up.') + ' The rest will load on their own tomorrow.' });
+          await load();
+          break;
+        }
+        if (r.busy) {
+          // Google's AI is overloaded or rate-limited. Wait, then keep going, up to about 10 minutes of waiting.
+          busyRounds++;
+          if (busyRounds > 10) {
+            setFbla({ running: false, loaded, remaining: r.remaining, failed, error: 'Google’s AI has been busy for a while. The rest will keep loading on their own in the background, or click the button again later.' });
+            break;
+          }
+          for (let s = 45; s > 0; s--) {
+            setFbla({ running: true, loaded, remaining: r.remaining, failed, error: '', waiting: `Google’s AI is busy. Trying again in ${s} seconds…` });
+            await new Promise((res) => setTimeout(res, 1000));
+          }
+          continue;
+        }
+        busyRounds = 0;
+        const stop = r.remaining === 0 || (r.loaded.length === 0 && r.failed.length === 0);
         setFbla({ running: !stop, loaded, remaining: r.remaining, failed, error: '' });
         await load();
         if (stop) break;
@@ -196,7 +216,7 @@ export function Admin() {
         {fbla && (
           <div className="mt-4 grid gap-2">
             <Notice tone={fbla.error ? 'bad' : 'gold'}>
-              {fbla.error || (fbla.running
+              {fbla.error || fbla.waiting || (fbla.running
                 ? `Read ${plural(fbla.loaded, 'event')} so far${fbla.remaining !== null ? `, ${fbla.remaining} to go` : ''}. This takes about 15 seconds per event. Keep this page open.`
                 : `Done. Read ${plural(fbla.loaded, 'event')}.${fbla.remaining ? ` ${fbla.remaining} still need topics; the timer will keep going in the background, or click the button again.` : ''}`)}
             </Notice>

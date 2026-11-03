@@ -68,7 +68,7 @@ export const api = {
     setQuestionStatus: (id: string, status: 'active' | 'hidden' | 'deleted') =>
       call<{ saved: boolean }>('setQuestionStatus', { id, status }),
     loadFbla: (skip: string[]) =>
-      call<{ added: number; loaded: string[]; failed: { id: string; name: string; error: string }[]; remaining: number }>('loadFbla', { skip }),
+      call<{ added: number; loaded: string[]; failed: { id: string; name: string; error: string }[]; remaining: number; busy?: boolean; daily?: boolean; message?: string }>('loadFbla', { skip }),
     reloadTopics: (eventId: string) => call<{ topics: Topic[]; note: string }>('reloadTopics', { eventId }),
     readiness: () => call<ReadinessRow[]>('readiness'),
   },
