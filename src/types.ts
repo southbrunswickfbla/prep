@@ -80,14 +80,16 @@ export type ReadinessRow = {
 export type Criterion = { name: string; points: number; description: string };
 
 export type JudgeEvent = {
-  id: string; name: string; category: string; guide: string; ready: boolean;
+  id: string; name: string; category: string; guide: string; ready: boolean; kind: 'presentation' | 'roleplay';
   presentMin: number; qaMin: number; prepMin: number; format: string; note: string;
   attempts: number; best: number | null; last: number | null;
 };
 
 export type PresentAttemptRow = { id: string; title: string; submitted: string; pct: number; score: number; max: number; seconds: number };
 
-export type JudgeEventDetail = JudgeEvent & { criteria: Criterion[]; history: PresentAttemptRow[] };
+export type JudgeEventDetail = JudgeEvent & { criteria: Criterion[]; indicators: string[]; history: PresentAttemptRow[] };
+
+export type Scenario = { title: string; background: string; yourRole: string; judgeRole: string; task: string; indicators: string[] };
 
 export type Transcript = { text: string; duration: number; words: number; wpm: number; fillers: number; pauses: number };
 
@@ -99,4 +101,7 @@ export type PresentResult = {
   score: number; max: number; pct: number; criteria: CriterionScore[];
   strengths: string[]; improvements: string[]; summary: string;
   qa: { q: string; a: string }[]; mode: 'voice' | 'typed'; prompt: string; transcript: string;
+  kind?: 'presentation' | 'roleplay'; scenario?: Scenario | null; team?: string;
+  coverage?: { name: string; covered: boolean; note: string }[];
+  interjections?: { q: string; at: number }[];
 };

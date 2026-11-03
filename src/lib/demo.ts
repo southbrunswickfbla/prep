@@ -208,10 +208,12 @@ export async function demoCall(action: string, p: Record<string, unknown>): Prom
       const j = JUDGE.find((x) => x.id === p.eventId);
       if (!j) throw new Error('That event isn’t available.');
       const history = loadPresent().filter((r) => r.eventId === j.id).reverse().map((r) => ({ id: r.id, title: r.title, submitted: r.submitted, pct: r.pct, score: r.score, max: r.max, seconds: r.seconds }));
-      return { ...judgeSummary(j), criteria: j.criteria, history } satisfies JudgeEventDetail;
+      return { ...judgeSummary(j), criteria: j.criteria, indicators: j.indicators || [], history } satisfies JudgeEventDetail;
     }
     case 'practicePrompt': return { prompt: /interview/.test(String(p.eventId)) ? 'Front desk assistant, Brunswick Community Center. Greet visitors, answer phones, schedule rooms, and keep records. Looking for someone organized, friendly, and comfortable with spreadsheets.' : 'Should every high school student be required to take a personal finance class?' };
     case 'slidesText': return { text: 'Demo slides', words: 2 };
+    case 'roleplayScenario': return { title: 'Smoothie Stand Slump', background: 'Berry Good Smoothies runs three stands near local high schools. Sales dropped 18% this fall after a national chain opened two blocks away with a loyalty app and $1 off on weekdays. The owner has $1,500 a month for marketing and wants to win back students without starting a price war.', yourRole: 'Marketing consultants hired by Berry Good Smoothies', judgeRole: 'Dana Reyes, the owner', task: 'Recommend a three-month marketing plan to win back student customers.', indicators: ['Identify target markets', 'Develop a pricing strategy', 'Describe promotion channels'] };
+    case 'roleplayInterject': return { question: 'That sounds expensive. How much of our $1,500 would that take each month?' };
     case 'transcribe': return { text: 'Um, good morning judges. Today I will talk about why every student should learn personal finance. First, most teens will open a bank account and get a credit card within a few years, uh, so they need to understand interest and credit scores. Second, budgeting skills help students avoid debt. For example, a student who saves fifty dollars a month will have six hundred dollars by the end of the year. Finally, you know, schools already teach math, so adding real-world money skills is a simple step. Thank you.', duration: 48, words: 92, wpm: 115, fillers: 3, pauses: 1 };
     case 'judgeQuestions': return { questions: ['How would you fit a finance class into an already full schedule?', 'What would you say to someone who thinks parents should teach money skills?'], secondsEach: 60 };
     case 'judgePresentation': {
@@ -225,6 +227,9 @@ export async function demoCall(action: string, p: Record<string, unknown>): Prom
         score, max, pct: max ? Math.round((score / max) * 100) : 0, criteria,
         strengths: ['Clear three-part structure', 'Concrete savings example'], improvements: ['Open with a stronger hook', 'Cite one real statistic', 'Slow down your conclusion'],
         summary: 'Demo mode: this is a sample score. Connect the backend to have the AI judge your real presentation.', qa: (p.qa as { q: string; a: string }[]) || [], mode: p.mode === 'typed' ? 'typed' : 'voice', prompt: String(p.prompt || ''), transcript: String(p.transcript || ''),
+        kind: j.kind, scenario: (p.scenario as PresentResult['scenario']) || null, team: String(p.team || ''),
+        interjections: (p.interjections as { q: string; at: number }[]) || [],
+        coverage: j.kind === 'roleplay' ? ((p.scenario as { indicators?: string[] })?.indicators || []).map((name, i) => ({ name, covered: i !== 1, note: i !== 1 ? 'Demo: mentioned with a specific idea.' : 'Demo: never came up.' })) : [],
       };
       savePresent([...loadPresent(), res]);
       return res;
@@ -238,15 +243,18 @@ export async function demoCall(action: string, p: Record<string, unknown>): Prom
 }
 
 /* ---------- Presentation judge (demo) ---------- */
-type DemoJudge = Omit<JudgeEvent, 'attempts' | 'best' | 'last'> & { criteria: { name: string; points: number; description: string }[] };
+type DemoJudge = Omit<JudgeEvent, 'attempts' | 'best' | 'last'> & { criteria: { name: string; points: number; description: string }[]; indicators?: string[] };
 const JUDGE: DemoJudge[] = [
-  { id: 'public-speaking', name: 'Public Speaking', category: 'Speaking and interview events', guide: '', ready: true, presentMin: 5, qaMin: 0, prepMin: 0, format: 'A prepared speech on a business topic, delivered to judges.', note: '',
+  { id: 'public-speaking', name: 'Public Speaking', category: 'Speaking and interview events', guide: '', ready: true, kind: 'presentation', presentMin: 5, qaMin: 0, prepMin: 0, format: 'A prepared speech on a business topic, delivered to judges.', note: '',
     criteria: [{ name: 'Introduction grabs attention', points: 10, description: 'Opens with a hook and states the topic.' }, { name: 'Organization and flow', points: 20, description: 'Clear points with smooth transitions.' }, { name: 'Supporting evidence', points: 20, description: 'Facts and examples back up each point.' }, { name: 'Conclusion', points: 10, description: 'Sums up and ends strongly.' }, { name: 'Voice and delivery', points: 20, description: 'Clear, confident, and well paced.' }, { name: 'Eye contact and poise', points: 10, description: 'Engages the judges with eye contact and posture.' }] },
-  { id: 'impromptu-speaking', name: 'Impromptu Speaking', category: 'Speaking and interview events', guide: '', ready: true, presentMin: 4, qaMin: 0, prepMin: 1, format: 'A speech on a topic given ten minutes before, with brief prep time.', note: '',
+  { id: 'impromptu-speaking', name: 'Impromptu Speaking', category: 'Speaking and interview events', guide: '', ready: true, kind: 'presentation', presentMin: 4, qaMin: 0, prepMin: 1, format: 'A speech on a topic given ten minutes before, with brief prep time.', note: '',
     criteria: [{ name: 'Addresses the topic', points: 20, description: 'Stays on the assigned topic.' }, { name: 'Organization', points: 20, description: 'Clear opening, body, and close.' }, { name: 'Support', points: 20, description: 'Gives reasons and examples.' }, { name: 'Delivery', points: 20, description: 'Confident and clear.' }, { name: 'Body language', points: 10, description: 'Gestures and eye contact.' }] },
-  { id: 'business-plan', name: 'Business Plan', category: 'Presentation events', guide: '', ready: true, presentMin: 7, qaMin: 3, prepMin: 0, format: 'A business plan presented to judges acting as investors.', note: '',
+  { id: 'business-plan', name: 'Business Plan', category: 'Presentation events', guide: '', ready: true, kind: 'presentation', presentMin: 7, qaMin: 3, prepMin: 0, format: 'A business plan presented to judges acting as investors.', note: '',
     criteria: [{ name: 'Executive summary', points: 10, description: 'States the business, need, and ask.' }, { name: 'Market analysis', points: 15, description: 'Target market supported by data.' }, { name: 'Financial plan', points: 15, description: 'Realistic revenue and costs.' }, { name: 'Answers judges’ questions', points: 10, description: 'Clear, confident answers.' }, { name: 'Professional appearance', points: 5, description: 'Dress and presence.' }] },
 ];
+JUDGE.push({ id: 'marketing-roleplay', name: 'Marketing', category: 'Role plays', guide: '', ready: true, kind: 'roleplay', presentMin: 7, qaMin: 0, prepMin: 20, format: 'Competitors act as marketing consultants to a business owner, played by the judge.', note: '',
+  indicators: ['Identify target markets', 'Develop a pricing strategy', 'Describe promotion channels', 'Analyze competitors', 'Explain the marketing mix'],
+  criteria: [{ name: 'Explains the problem and goal', points: 10, description: 'Shows they understand the business’s situation.' }, { name: 'Covers the performance indicators', points: 40, description: 'Addresses each indicator with specific ideas.' }, { name: 'Handles the judge’s questions', points: 15, description: 'Answers clearly and stays in role.' }, { name: 'Clear recommendation', points: 15, description: 'Ends with a specific plan.' }, { name: 'Professional demeanor', points: 10, description: 'Confident body language and eye contact.' }] });
 const PKEY = 'fblaprep.demo.present';
 function loadPresent(): PresentResult[] { try { return JSON.parse(localStorage.getItem(PKEY) || '[]') as PresentResult[]; } catch { return []; } }
 function savePresent(r: PresentResult[]) { try { localStorage.setItem(PKEY, JSON.stringify(r.slice(-30))); } catch { /* ignore */ } }

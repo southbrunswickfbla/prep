@@ -1,6 +1,6 @@
 import { API_URL, DEMO } from './config';
 import { demoCall } from './demo';
-import type { AdminOverview, Criterion, Dashboard, JudgeEvent, JudgeEventDetail, Level, Mode, PresentResult, ReadinessRow, Results, StartRes, StudyNotes, Topic, Transcript } from '../types';
+import type { AdminOverview, Criterion, Scenario, Dashboard, JudgeEvent, JudgeEventDetail, Level, Mode, PresentResult, ReadinessRow, Results, StartRes, StudyNotes, Topic, Transcript } from '../types';
 
 export class ApiError extends Error {
   code: string;
@@ -66,6 +66,11 @@ export const api = {
       call<{ questions: string[]; secondsEach: number }>('judgeQuestions', { eventId, title, transcript, slides, prompt }),
     judge: (body: Record<string, unknown>) => call<PresentResult>('judgePresentation', body),
     result: (id: string) => call<PresentResult>('presentResult', { id }),
+  },
+  roleplay: {
+    scenario: (eventId: string) => call<Scenario>('roleplayScenario', { eventId }),
+    interject: (eventId: string, scenario: Scenario, transcript: string, atSeconds: number) =>
+      call<{ question: string }>('roleplayInterject', { eventId, scenario, transcript, atSeconds }),
   },
   admin: {
     overview: () => call<AdminOverview>('adminOverview'),

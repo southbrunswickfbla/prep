@@ -88,6 +88,15 @@ Members practice 32 presentation, speaking, interview, and chapter events out lo
 - **Privacy.** The recording is sent to Groq to be transcribed and is never saved. The **Presentations** tab keeps each member's transcript and scores, so share the sheet only with officers and advisers, and let your adviser know students' voices are transcribed by an outside service.
 - **What it can't judge.** Rating sheet lines about appearance, eye contact, or body language are shown as "judged in person" and left out of the score.
 
+## 6. Role play judge
+
+The 12 role play events have their own **Role plays** page. Their test round stays under **Tests**.
+
+- **Setup is the same as presentations.** Running `setup` adds them to the **Judging** tab, and each one's performance indicators, rating sheet, and times (20 minutes of prep and a 7-minute role play, unless the guidelines say otherwise) load the first time someone opens it, or with **Load all rating sheets** on the Admin page.
+- **How a run works.** The AI writes a fresh scenario from the event's performance indicators. The member preps with the real timer and a notes box (like the two notecards), then performs out loud. About halfway through, the judge interrupts in character with a question about what they just said. Scores cover each rating sheet line and which performance indicators they covered.
+- **Teams.** One device records the whole team. Speech-to-text can't tell voices apart, so teammates should say their name the first time they speak.
+- **Speech-to-text use.** Each role play transcribes about 10 minutes of audio (the first half again for the judge's interruption, then the whole thing), so it uses more of Groq's daily audio allowance than a presentation.
+
 ## Try it locally
 
 ```bash

@@ -44,6 +44,9 @@ function Shell() {
           <Route path="results/:sessionId" element={<Results />} />
           <Route path="progress" element={<Progress />} />
           <Route path="present" element={<PresentList />} />
+          <Route path="roleplay" element={<PresentList kind="roleplay" />} />
+          <Route path="roleplay/result/:id" element={<PresentResultPage />} />
+          <Route path="roleplay/:eventId" element={<PresentEvent />} />
           <Route path="present/result/:id" element={<PresentResultPage />} />
           <Route path="present/:eventId" element={<PresentEvent />} />
           <Route path="admin" element={<Admin />} />

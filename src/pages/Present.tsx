@@ -4,9 +4,10 @@ import { api, errorText } from '../lib/api';
 import { clock, plural, shortDate } from '../lib/format';
 import { blobToBase64, recordingSupported, speak, stopSpeaking, useRecorder, type Recording } from '../lib/recorder';
 import { Bar, btn, External, Loading, Notice, PageHead } from '../components/Layout';
-import type { JudgeEvent, JudgeEventDetail, PresentResult, Transcript } from '../types';
+import type { JudgeEvent, JudgeEventDetail, PresentResult, Scenario, Transcript } from '../types';
 
-const ORDER = ['Presentation events', 'Speaking and interview events', '9th & 10th grade presentations', 'Chapter events'];
+const ORDER = ['Role plays', 'Presentation events', 'Speaking and interview events', '9th & 10th grade presentations', 'Chapter events'];
+const base = (kind: string) => (kind === 'roleplay' ? '/roleplay' : '/present');
 const rank = (g: string) => (ORDER.indexOf(g) < 0 ? 99 : ORDER.indexOf(g));
 const usesPrompt = (e: { name: string; prepMin: number }) => /impromptu|interview/i.test(e.name) || e.prepMin > 0;
 const isInterview = (e: { name: string }) => /interview/i.test(e.name);
@@ -17,6 +18,7 @@ function timing(e: { presentMin: number; qaMin: number; prepMin: number; name: s
   if (!e.presentMin) return 'Time limits load from the guidelines';
   const parts = [];
   if (e.prepMin) parts.push(`${minutes(e.prepMin)} min to prepare`);
+  if ((e as { kind?: string }).kind === 'roleplay') { parts.push(`up to ${minutes(e.presentMin)} min role play`); const t = parts.join(', '); return t.charAt(0).toUpperCase() + t.slice(1); }
   parts.push(`up to ${minutes(e.presentMin)} min ${isInterview(e) ? 'interview' : 'to present'}`);
   if (e.qaMin) parts.push(`${minutes(e.qaMin)} min of questions`);
   const text = parts.join(', ');
@@ -25,32 +27,39 @@ function timing(e: { presentMin: number; qaMin: number; prepMin: number; name: s
 
 /* ====================== Event list ====================== */
 
-export function PresentList() {
+export function PresentList({ kind = 'presentation' }: { kind?: 'presentation' | 'roleplay' }) {
   const [events, setEvents] = useState<JudgeEvent[] | null>(null);
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
   useEffect(() => { api.present.events().then(setEvents).catch((e) => setError(errorText(e))); }, []);
   if (error) return <Notice tone="bad">{error}</Notice>;
-  if (!events) return <Loading label="Loading presentation events…" />;
+  if (!events) return <Loading label={kind === 'roleplay' ? 'Loading role play events…' : 'Loading presentation events…'} />;
 
   const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const list = events.filter((e) => words.every((w) => e.name.toLowerCase().includes(w)));
+  const list = events.filter((e) => (e.kind || 'presentation') === kind && words.every((w) => e.name.toLowerCase().includes(w)));
   const groups = [...new Set(list.map((e) => e.category || 'Presentation events'))].sort((a, b) => rank(a) - rank(b));
 
   return (
     <div className="animate-rise">
-      <PageHead
-        title="Presentation judge"
-        sub="Present out loud, answer an AI judge’s questions, and get scored on your event’s official 2026–27 rating sheet, with a quote from what you said for every line."
-      />
+      {kind === 'roleplay' ? (
+        <PageHead
+          title="Role play judge"
+          sub="Get a fresh scenario, prep with the real timer, then perform out loud while an AI judge plays the role and interrupts with questions. You’re scored on the official 2026–27 rating sheet and the performance indicators you covered."
+        />
+      ) : (
+        <PageHead
+          title="Presentation judge"
+          sub="Present out loud, answer an AI judge’s questions, and get scored on your event’s official 2026–27 rating sheet, with a quote from what you said for every line."
+        />
+      )}
       <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search events" aria-label="Search events" className={`${input} max-w-md bg-white`} />
-      {events.length === 0 && <div className="mt-8"><Notice>Presentation events aren’t set up yet. An officer can add them by running setup again.</Notice></div>}
+      {list.length === 0 && !q && <div className="mt-8"><Notice>These events aren’t set up yet. An officer can add them by running setup again in Apps Script.</Notice></div>}
       {groups.map((g) => (
         <section key={g} className="mt-10">
           <h2 className="font-semiwide text-[15px] font-extrabold text-ink-2">{g}</h2>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             {list.filter((e) => (e.category || 'Presentation events') === g).map((e) => (
-              <Link key={e.id} to={`/present/${e.id}`} className="cut group block bg-white p-5 transition hover:bg-navy-100/40">
+              <Link key={e.id} to={`${base(kind)}/${e.id}`} className="cut group block bg-white p-5 transition hover:bg-navy-100/40">
                 <div className="font-semiwide text-[17px] font-extrabold text-navy-950 group-hover:text-blue">{e.name}</div>
                 <div className="mt-1 text-[14px] text-ink-2">{e.ready ? timing(e) : 'The rating sheet loads the first time you open it'}</div>
                 {e.attempts > 0 && (
@@ -84,6 +93,27 @@ function Meter({ level }: { level: number }) {
   );
 }
 
+function ScenarioCard({ sc, compact = false }: { sc: Scenario; compact?: boolean }) {
+  return (
+    <article className="cut bg-white p-6">
+      <p className="text-[13px] font-bold text-blue">Your scenario</p>
+      <h2 className="mt-1 font-semiwide text-xl font-extrabold text-navy-950">{sc.title}</h2>
+      <p className={`mt-3 text-[16px] leading-relaxed text-ink ${compact ? 'line-clamp-4' : ''}`}>{sc.background}</p>
+      <dl className="mt-4 grid gap-3 text-[15px] sm:grid-cols-2">
+        <div><dt className="text-[13px] font-bold text-ink-2">You are</dt><dd className="font-semibold text-navy-950">{sc.yourRole}</dd></div>
+        <div><dt className="text-[13px] font-bold text-ink-2">The judge plays</dt><dd className="font-semibold text-navy-950">{sc.judgeRole}</dd></div>
+        <div className="sm:col-span-2"><dt className="text-[13px] font-bold text-ink-2">Your task</dt><dd className="font-semibold text-navy-950">{sc.task}</dd></div>
+      </dl>
+      {sc.indicators.length > 0 && (
+        <div className="mt-4">
+          <p className="text-[13px] font-bold text-ink-2">Performance indicators the judge looks for</p>
+          <ul className="mt-1 grid gap-1 pl-5 text-[15px] [list-style:square] marker:text-gold">{sc.indicators.map((i) => <li key={i}>{i}</li>)}</ul>
+        </div>
+      )}
+    </article>
+  );
+}
+
 export function PresentEvent() {
   const { eventId = '' } = useParams();
   const navigate = useNavigate();
@@ -113,6 +143,13 @@ export function PresentEvent() {
   const [answerMode, setAnswerMode] = useState<'voice' | 'typed'>('voice');
   const rec = useRecorder();
   const stopping = useRef(false);
+  // Role play
+  const [scenario, setScenario] = useState<Scenario | null>(null);
+  const [notes, setNotes] = useState('');
+  const [team, setTeam] = useState('');
+  const [interjections, setInterjections] = useState<{ q: string; at: number }[]>([]);
+  const interjectAsked = useRef(false);
+  const roleplay = ev?.kind === 'roleplay';
 
   useEffect(() => {
     api.present.event(eventId).then(setEv).catch((e) => setLoadError(errorText(e)));
@@ -152,13 +189,28 @@ export function PresentEvent() {
       if (!ok) return;
     }
     stopping.current = false;
+    interjectAsked.current = false;
+    interjecting.current = false;
+    setInterjections([]);
     setDeadline(Date.now() + Math.round((ev.presentMin || 7) * 60) * 1000);
     setStep('present');
     window.scrollTo({ top: 0 });
   }
 
-  function start() {
+  async function start() {
     if (!ev) return;
+    if (ev.kind === 'roleplay') {
+      setBusy('scenario'); setError('');
+      try {
+        const sc = await api.roleplay.scenario(eventId);
+        setScenario(sc); setNotes('');
+        setDeadline(Date.now() + Math.round((ev.prepMin || 20) * 60) * 1000);
+        setStep('prep');
+        window.scrollTo({ top: 0 });
+      } catch (e) { setError(errorText(e)); }
+      finally { setBusy(''); }
+      return;
+    }
     if (usesPrompt(ev) && !prompt) { setError('Get a practice prompt first.'); return; }
     if (ev.prepMin && prompt) {
       setDeadline(Date.now() + Math.round(ev.prepMin * 60) * 1000);
@@ -200,8 +252,38 @@ export function PresentEvent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [left, step]);
 
+  // Role play: partway through, the judge interrupts in character with a question about what was said.
+  const interjecting = useRef(false);
+  useEffect(() => {
+    if (step !== 'present' || !roleplay || !ev || !scenario || interjectAsked.current || interjecting.current || !deadline) return;
+    const limit = Math.round((ev.presentMin || 7) * 60);
+    if (limit - left < Math.round(limit * 0.45) || left < 20) return;
+    interjecting.current = true;
+    void (async () => {
+      try {
+        let soFar = typed;
+        if (mode === 'voice') {
+          const snap = await rec.snapshot();
+          if (!snap) return; // nothing recorded yet: try again on the next tick
+          soFar = (await api.present.transcribe(await blobToBase64(snap.blob), snap.mime)).text;
+        }
+        interjectAsked.current = true;
+        const r = await api.roleplay.interject(eventId, scenario, soFar, limit - left);
+        const at = Math.round(limit - Math.max(0, (deadline - Date.now()) / 1000));
+        setInterjections((x) => [...x, { q: r.question, at }]);
+        speak(r.question);
+      } catch {
+        interjectAsked.current = true; // skip the interruption rather than retry and distract
+      } finally {
+        interjecting.current = false;
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [left, step]);
+
   async function toQuestions() {
     if (!ev || !transcript) return;
+    if (ev.kind === 'roleplay') { void score([]); return; }
     const hasQa = ev.qaMin > 0 || isInterview(ev);
     if (!hasQa) { void score([]); return; }
     setStep('questions'); setError('');
@@ -251,9 +333,10 @@ export function PresentEvent() {
       const res = await api.present.judge({
         eventId, title, transcript: transcript.text, slides: slides?.text || '', qa: answers, prompt,
         seconds: transcript.duration, wpm: transcript.wpm, fillers: mode === 'voice' ? transcript.fillers : 0, pauses: transcript.pauses, mode,
+        scenario, interjections, team: team.trim(),
       });
       try { sessionStorage.setItem('fblaprep.present.' + res.id, JSON.stringify(res)); } catch { /* ignore */ }
-      navigate(`/present/result/${res.id}`);
+      navigate(`${base(ev?.kind || 'presentation')}/result/${res.id}`);
     } catch (e) { setError(errorText(e)); }
   }
 
@@ -261,6 +344,7 @@ export function PresentEvent() {
 
   if (loadError) return <Notice tone="bad">{loadError}</Notice>;
   if (!ev) return <Loading label="Reading this event’s rating sheet from the official guidelines. The first time takes about 15 seconds." />;
+  const home = base(ev.kind);
   const total = ev.criteria.reduce((n, c) => n + c.points, 0);
 
   // Full-screen stages
@@ -272,7 +356,7 @@ export function PresentEvent() {
           <div className="flex flex-wrap items-center justify-between gap-6">
             <div>
               <p className="font-semiwide text-[15px] font-extrabold text-gold">{ev.name}{title ? `: ${title}` : ''}</p>
-              <h1 className="mt-1 font-wide text-[clamp(28px,4vw,40px)] font-black leading-none">{step === 'prep' ? 'Prepare' : mode === 'voice' ? 'You’re on' : 'Type your script'}</h1>
+              <h1 className="mt-1 font-wide text-[clamp(28px,4vw,40px)] font-black leading-none">{step === 'prep' ? (roleplay ? 'Read and prepare' : 'Prepare') : mode === 'voice' ? 'You’re on' : roleplay ? 'Type what you’d say' : 'Type your script'}</h1>
               {step === 'present' && mode === 'voice' && (
                 <div className="mt-4 flex items-center gap-3">
                   <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-bad" aria-hidden="true" />
@@ -288,7 +372,30 @@ export function PresentEvent() {
           {step === 'present' && warn && mode === 'voice' && <p className="mt-3 text-[15px] font-bold text-gold-300" aria-live="polite">{left > 0 ? 'One minute left.' : 'Time.'}</p>}
         </section>
 
-        {prompt && (
+        {roleplay && interjections.length > 0 && step === 'present' && (
+          <div className="cut mt-5 bg-gold p-6 text-navy-950 animate-rise" role="alert">
+            <p className="text-[13px] font-black">The judge interrupts</p>
+            <p className="mt-1 font-semiwide text-[20px] font-bold leading-snug">“{interjections[interjections.length - 1].q}”</p>
+            <p className="mt-2 text-[14px] font-semibold">Answer it out loud, then keep going.{mode === 'typed' ? ' Type your answer into your script.' : ''}</p>
+          </div>
+        )}
+
+        {roleplay && scenario && (
+          <div className={`mt-5 grid gap-5 ${step === 'prep' ? 'lg:grid-cols-[1.4fr_1fr]' : ''}`}>
+            <ScenarioCard sc={scenario} compact={step === 'present'} />
+            {step === 'prep' ? (
+              <label className="cut grid content-start gap-2 bg-white p-6 text-[13px] font-bold text-ink-2">
+                Your notes
+                <span className="font-normal">FBLA gives you two notecards. Jot what you’d put on them.</span>
+                <textarea className={`${input} min-h-56 text-[15px] font-normal`} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Key points, numbers, your recommendation…" />
+              </label>
+            ) : notes.trim() ? (
+              <div className="cut bg-white p-5"><p className="text-[13px] font-bold text-ink-2">Your notes</p><p className="mt-1 whitespace-pre-wrap text-[15px]">{notes}</p></div>
+            ) : null}
+          </div>
+        )}
+
+        {prompt && !roleplay && (
           <div className="cut mt-5 bg-white p-6">
             <p className="text-[13px] font-bold text-blue">{isInterview(ev) ? 'The job' : 'Your prompt'}</p>
             <p className="mt-1 whitespace-pre-wrap text-[17px] text-navy-950">{prompt}</p>
@@ -307,7 +414,7 @@ export function PresentEvent() {
         )}
 
         <div className="mt-5 flex flex-wrap gap-3">
-          {step === 'prep' && <button className={btn.gold} onClick={() => void beginPresenting()}>Start presenting now</button>}
+          {step === 'prep' && <button className={btn.gold} onClick={() => void beginPresenting()}>{roleplay ? 'Start the role play now' : 'Start presenting now'}</button>}
           {step === 'present' && <button className={btn.gold} onClick={() => void finishPresenting()}>{mode === 'voice' ? 'Stop and get scored' : 'Done, get scored'}</button>}
         </div>
         {(error || rec.error) && <div className="mt-5"><Notice tone="bad">{error || rec.error}</Notice></div>}
@@ -347,7 +454,7 @@ export function PresentEvent() {
         </div>
         <textarea className={`${input} min-h-64 bg-white text-[16px]`} value={transcript.text} onChange={(e) => setTranscript({ ...transcript, text: e.target.value })} aria-label="Transcript" />
         <div className="mt-5 flex flex-wrap gap-3">
-          <button className={btn.gold} onClick={() => void toQuestions()}>{ev.qaMin > 0 || isInterview(ev) ? 'Continue to the judge’s questions' : 'Get scored'}</button>
+          <button className={btn.gold} onClick={() => void toQuestions()}>{!roleplay && (ev.qaMin > 0 || isInterview(ev)) ? 'Continue to the judge’s questions' : 'Get scored'}</button>
           <button className={btn.quiet} onClick={() => setStep('setup')}>Start over</button>
         </div>
       </div>
@@ -408,7 +515,7 @@ export function PresentEvent() {
   // Setup
   return (
     <div className="animate-rise">
-      <Link to="/present" className="text-[14px] font-bold text-ink-2 hover:text-navy-950">All presentation events</Link>
+      <Link to={home} className="text-[14px] font-bold text-ink-2 hover:text-navy-950">{roleplay ? 'All role play events' : 'All presentation events'}</Link>
       <div className="mt-3">
         <PageHead title={ev.name} sub={ev.format || 'Practice your presentation and get scored on the official rating sheet.'} />
       </div>
@@ -421,14 +528,25 @@ export function PresentEvent() {
             <h2 className="font-semiwide text-xl font-extrabold text-navy-950">Practice run</h2>
             <p className="mt-1 text-[15px] text-ink-2">{timing(ev)}, timed like the real event.</p>
 
-            {!isInterview(ev) && (
+            {roleplay && (
+              <>
+                <p className="mt-4 text-[15px] text-ink">You’ll get a brand-new scenario built from this event’s performance indicators. Read it and make notes during prep time, then perform it out loud. About halfway through, the judge will interrupt with a question, just like the real event.</p>
+                <label className="mt-5 grid gap-1 text-[13px] font-bold text-ink-2">
+                  Teammates <span className="font-normal">(optional, for team role plays)</span>
+                  <input className={input} value={team} onChange={(e) => setTeam(e.target.value)} placeholder="For example: Priya, Sam" />
+                </label>
+                {team.trim() && <p className="mt-2 text-[13px] text-ink-2">Say your name the first time you speak, so the judge can follow who’s talking.</p>}
+              </>
+            )}
+
+            {!isInterview(ev) && !roleplay && (
               <label className="mt-5 grid gap-1 text-[13px] font-bold text-ink-2">
                 What’s your presentation about? <span className="font-normal">(optional, helps the judge)</span>
                 <input className={input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="For example: SnackSmart, a healthy vending business" />
               </label>
             )}
 
-            {usesPrompt(ev) && (
+            {usesPrompt(ev) && !roleplay && (
               <div className="mt-5">
                 <p className="text-[13px] font-bold text-ink-2">{isInterview(ev) ? 'Practice job posting' : 'Practice prompt'}</p>
                 {prompt ? <p className="cut-sm mt-2 whitespace-pre-wrap bg-paper p-4 text-[15px]">{prompt}</p> : null}
@@ -439,7 +557,7 @@ export function PresentEvent() {
               </div>
             )}
 
-            {!isInterview(ev) && !/impromptu|public speaking/i.test(ev.name) && (
+            {!isInterview(ev) && !roleplay && !/impromptu|public speaking/i.test(ev.name) && (
               <div className="mt-5">
                 <p className="text-[13px] font-bold text-ink-2">Slides <span className="font-normal">(optional PDF, so the judge can see them)</span></p>
                 {slides ? (
@@ -466,7 +584,9 @@ export function PresentEvent() {
               </div>
             </fieldset>
 
-            <button className={`${btn.gold} mt-6`} disabled={!!busy} onClick={start}>{ev.prepMin && usesPrompt(ev) ? 'Start prep time' : 'Start presenting'}</button>
+            <button className={`${btn.gold} mt-6`} disabled={!!busy} onClick={() => void start()}>
+              {busy === 'scenario' ? 'Writing your scenario…' : roleplay ? `Get my scenario and start ${minutes(ev.prepMin || 20)} min of prep` : ev.prepMin && usesPrompt(ev) ? 'Start prep time' : 'Start presenting'}
+            </button>
             {mode === 'voice' && <p className="mt-3 text-[13px] text-ink-2">Chrome will ask to use your microphone. The recording is only used to make a transcript and is never saved.</p>}
             {(error || rec.error) && <div className="mt-4"><Notice tone="bad">{error || rec.error}</Notice></div>}
           </section>
@@ -495,7 +615,7 @@ export function PresentEvent() {
           <ul className="cut mt-4 divide-y divide-line bg-white">
             {ev.history.map((h) => (
               <li key={h.id}>
-                <Link to={`/present/result/${h.id}`} className="flex items-center justify-between gap-3 px-5 py-3.5 hover:bg-navy-100/50">
+                <Link to={`${home}/result/${h.id}`} className="flex items-center justify-between gap-3 px-5 py-3.5 hover:bg-navy-100/50">
                   <span><span className="block font-bold text-navy-950">{h.title || ev.name}</span><span className="text-[13px] text-ink-2">{shortDate(h.submitted)}, {clock(h.seconds)}</span></span>
                   <span className="font-wide text-xl font-black text-navy-900">{h.pct}%</span>
                 </Link>
@@ -557,8 +677,8 @@ export function PresentResultPage() {
       </div>
 
       <div className="mt-6 flex flex-wrap gap-3">
-        <Link to={`/present/${res.eventId}`} className={btn.gold}>Practice again</Link>
-        <Link to="/present" className={btn.quiet}>All presentation events</Link>
+        <Link to={`${base(res.kind || 'presentation')}/${res.eventId}`} className={btn.gold}>{res.kind === 'roleplay' ? 'Try a new scenario' : 'Practice again'}</Link>
+        <Link to={base(res.kind || 'presentation')} className={btn.quiet}>{res.kind === 'roleplay' ? 'All role play events' : 'All presentation events'}</Link>
       </div>
 
       {res.summary && <p className="cut mt-8 bg-white p-6 text-[17px] leading-relaxed text-navy-950">“{res.summary}”</p>}
@@ -573,6 +693,21 @@ export function PresentResultPage() {
           <ol className="mt-2 grid list-decimal gap-2 pl-5 text-[15px]">{res.improvements.map((s) => <li key={s}>{s}</li>)}</ol>
         </section>
       </div>
+
+      {res.coverage && res.coverage.length > 0 && (
+        <section className="mt-12">
+          <h2 className="font-semiwide text-2xl font-extrabold text-navy-950">Performance indicators</h2>
+          <p className="mt-1 text-ink-2">{res.coverage.filter((c) => c.covered).length} of {res.coverage.length} covered.</p>
+          <ul className="cut mt-4 divide-y divide-line bg-white">
+            {res.coverage.map((c) => (
+              <li key={c.name} className="flex gap-3 px-5 py-3.5">
+                <span className={`cut-sm grid h-7 w-7 shrink-0 place-items-center text-[13px] font-black ${c.covered ? 'bg-good text-white' : 'bg-bad-100 text-bad'}`} aria-hidden="true">{c.covered ? '✓' : '–'}</span>
+                <span><b className="text-navy-950">{c.name}</b><span className="sr-only">{c.covered ? ', covered' : ', missed'}</span>{c.note ? <span className="block text-[14px] text-ink-2">{c.note}</span> : null}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="mt-12">
         <h2 className="font-semiwide text-2xl font-extrabold text-navy-950">Rating sheet</h2>
@@ -614,6 +749,24 @@ export function PresentResultPage() {
               </li>
             ))}
           </ol>
+        </section>
+      )}
+
+      {res.interjections && res.interjections.length > 0 && (
+        <section className="mt-12">
+          <h2 className="font-semiwide text-2xl font-extrabold text-navy-950">When the judge interrupted</h2>
+          <ul className="mt-4 grid gap-3">
+            {res.interjections.map((x, i) => (
+              <li key={i} className="cut bg-white p-5"><p className="font-bold text-navy-950">“{x.q}”</p><p className="mt-1 text-[14px] text-ink-2">At {clock(x.at)}. Your answer is in the transcript around that time.</p></li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {res.scenario && (
+        <section className="mt-12">
+          <h2 className="font-semiwide text-2xl font-extrabold text-navy-950">The scenario</h2>
+          <div className="mt-4"><ScenarioCard sc={res.scenario} /></div>
         </section>
       )}
 

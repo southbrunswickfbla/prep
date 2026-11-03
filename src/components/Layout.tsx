@@ -103,6 +103,7 @@ function Header() {
             <NavLink to="/" end className={link}>Home</NavLink>
             <NavLink to="/practice" className={link}>Tests</NavLink>
             <NavLink to="/present" className={link}>Presentations</NavLink>
+            <NavLink to="/roleplay" className={link}>Role plays</NavLink>
             <NavLink to="/progress" className={link}>Progress</NavLink>
             {data?.admin && <NavLink to="/admin" className={link}>Admin</NavLink>}
           </nav>
@@ -124,6 +125,7 @@ function Header() {
           <NavLink to="/" end className={link}>Home</NavLink>
           <NavLink to="/practice" className={link}>Tests</NavLink>
           <NavLink to="/present" className={link}>Presentations</NavLink>
+            <NavLink to="/roleplay" className={link}>Role plays</NavLink>
           <NavLink to="/progress" className={link}>Progress</NavLink>
           {data?.admin && <NavLink to="/admin" className={link}>Admin</NavLink>}
         </nav>
@@ -159,6 +161,7 @@ function Footer() {
           <ul className="mt-3 space-y-2 text-[15px] text-navy-100">
             <li><Link to="/practice" className="hover:text-white">Test practice</Link></li>
             <li><Link to="/present" className="hover:text-white">Presentation judge</Link></li>
+            <li><Link to="/roleplay" className="hover:text-white">Role play judge</Link></li>
             <li><Link to="/progress" className="hover:text-white">Your progress</Link></li>
           </ul>
         </div>

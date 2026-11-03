@@ -106,7 +106,23 @@ export function useRecorder() {
     r.stop();
   }), [cleanup]);
 
-  return { recording, level, error, start, stop, setError };
+  /** The audio recorded so far, without stopping. Used to hear what was said mid-performance. */
+  const snapshot = useCallback(async (): Promise<Recording | null> => {
+    const r = rec.current;
+    if (!r || r.state !== 'recording') return null;
+    // Ask the recorder to hand over what it has right now, then wait briefly for it.
+    await new Promise<void>((resolve) => {
+      const done = () => { r.removeEventListener('dataavailable', done); resolve(); };
+      r.addEventListener('dataavailable', done);
+      try { r.requestData(); } catch { done(); }
+      setTimeout(done, 1500);
+    });
+    if (!chunks.current.length) return null;
+    const mime = r.mimeType || 'audio/webm';
+    return { blob: new Blob(chunks.current, { type: mime }), mime, seconds: Math.round((Date.now() - startedAt.current) / 1000) };
+  }, []);
+
+  return { recording, level, error, start, stop, snapshot, setError };
 }
 
 /** Reads text aloud with the browser's built-in voice, if it has one. */

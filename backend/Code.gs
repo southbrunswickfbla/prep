@@ -1,5 +1,5 @@
 /**
- * SBHS FBLA Prep — backend (Google Apps Script), v3
+ * SBHS FBLA Prep — backend (Google Apps Script), v3.1
  *
  * Paste this into the Apps Script project attached to the "FBLA Prep Data" Google Sheet,
  * save, then run setup() once. Full steps are in SETUP.md.
@@ -34,7 +34,7 @@
  *  AI_MIN_GAP_MS        default 6000. Minimum time between AI calls, to stay under the free per-minute limit.
  */
 
-const VERSION = 'v3';
+const VERSION = 'v3.1';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 
 const TABS = {
@@ -45,7 +45,7 @@ const TABS = {
   Users:     ['email', 'name', 'firstSeen', 'lastSeen', 'sessions'],
   Flags:     ['time', 'email', 'questionId', 'reason'],
   Notes:     ['eventId', 'topic', 'content', 'updated', 'source'],
-  Judging:   ['id', 'name', 'category', 'guide', 'rubric', 'presentMin', 'qaMin', 'prepMin', 'format', 'note', 'updated', 'active'],
+  Judging:   ['id', 'name', 'category', 'guide', 'rubric', 'presentMin', 'qaMin', 'prepMin', 'format', 'note', 'updated', 'active', 'kind', 'indicators'],
   Presentations: ['id', 'email', 'eventId', 'eventName', 'title', 'submitted', 'seconds', 'words', 'wpm', 'fillers', 'pauses', 'score', 'max', 'pct', 'detail', 'transcript'],
 };
 
@@ -109,6 +109,8 @@ function route(action, b, user) {
     case 'judgeQuestions': return judgeQuestions(String(b.eventId || ''), String(b.title || ''), String(b.transcript || ''), String(b.slides || ''), String(b.prompt || ''));
     case 'judgePresentation': return judgePresentation(user, b);
     case 'presentResult': return presentResult(user, String(b.id || ''));
+    case 'roleplayScenario': return roleplayScenario(String(b.eventId || ''));
+    case 'roleplayInterject': return roleplayInterject(String(b.eventId || ''), b.scenario || {}, String(b.transcript || ''), Number(b.atSeconds) || 0);
   }
   if (!user.admin) throw fail('forbidden', 'Only officers can do that.');
   switch (action) {
@@ -1460,6 +1462,22 @@ const PRESENT_EVENTS = [
   ['Local Chapter Annual Business Report', 'Chapter events', 'Chapter%20Events/Local-Chapter-Annual-Business-Report.pdf'],
 ];
 
+/* The 12 role play events. Their test round is under Tests; this is the performance round. */
+const ROLEPLAY_EVENTS = [
+  ['Banking & Financial Systems', 'Role%20Play%20Events/Banking-and-Financial-Systems.pdf'],
+  ['Business Management', 'Role%20Play%20Events/Business-Management.pdf'],
+  ['Customer Service', 'Role%20Play%20Events/Customer-Service.pdf'],
+  ['Entrepreneurship', 'Role%20Play%20Events/Entrepreneurship.pdf'],
+  ['Hospitality & Event Management', 'Role%20Play%20Events/Hospitality-and-Event-Management.pdf'],
+  ['International Business', 'Role%20Play%20Events/International-Business.pdf'],
+  ['Management Information Systems', 'Role%20Play%20Events/Management-Information-Systems.pdf'],
+  ['Marketing', 'Role%20Play%20Events/Marketing.pdf'],
+  ['Network Design', 'Role%20Play%20Events/Network-Design.pdf'],
+  ['Parliamentary Procedure', 'Role%20Play%20Events/Parliamentary-Procedure.pdf'],
+  ['Sports & Entertainment Management', 'Role%20Play%20Events/Sports-and-Entertainment-Management.pdf'],
+  ['Technology Support & Services', 'Role%20Play%20Events/Technology-Support-and-Services.pdf'],
+];
+
 function readJudging() {
   return readAll('Judging').filter(function (r) { return r.id && String(r.active).toUpperCase() !== 'FALSE'; }).map(function (r) {
     return {
@@ -1467,11 +1485,13 @@ function readJudging() {
       criteria: jsonArr(r.rubric).filter(function (c) { return c && c.name; }).map(function (c) { return { name: String(c.name), points: Number(c.points) || 0, description: String(c.description || '') }; }),
       presentMin: Number(r.presentMin) || 0, qaMin: Number(r.qaMin) || 0, prepMin: Number(r.prepMin) || 0,
       format: String(r.format || ''), note: String(r.note || ''), _row: r._row,
+      kind: String(r.kind || '') === 'roleplay' ? 'roleplay' : 'presentation',
+      indicators: jsonArr(r.indicators).map(String).filter(String),
     };
   });
 }
 function judgingRow(j, changes) {
-  const o = { id: j.id, name: j.name, category: j.category, guide: j.guide, rubric: JSON.stringify(j.criteria || []), presentMin: j.presentMin || '', qaMin: j.qaMin || 0, prepMin: j.prepMin || 0, format: j.format || '', note: j.note || '', updated: nowIso(), active: true };
+  const o = { id: j.id, name: j.name, category: j.category, guide: j.guide, rubric: JSON.stringify(j.criteria || []), presentMin: j.presentMin || '', qaMin: j.qaMin || 0, prepMin: j.prepMin || 0, format: j.format || '', note: j.note || '', updated: nowIso(), active: true, kind: j.kind || 'presentation', indicators: JSON.stringify(j.indicators || []) };
   Object.keys(changes || {}).forEach(function (k) { o[k] = changes[k]; });
   return o;
 }
@@ -1481,7 +1501,13 @@ function seedJudging() {
     const have = {};
     readAll('Judging').forEach(function (r) { have[norm(r.name)] = true; });
     const rows = PRESENT_EVENTS.filter(function (p) { return !have[norm(p[0])]; }).map(function (p) {
-      return { id: slug(p[0]), name: p[0], category: p[1], guide: GUIDE_BASE + p[2], rubric: '[]', presentMin: '', qaMin: 0, prepMin: 0, format: '', note: '', updated: nowIso(), active: true };
+      return { id: slug(p[0]), name: p[0], category: p[1], guide: GUIDE_BASE + p[2], rubric: '[]', presentMin: '', qaMin: 0, prepMin: 0, format: '', note: '', updated: nowIso(), active: true, kind: 'presentation', indicators: '[]' };
+    });
+    // Role plays share names with nothing in PRESENT_EVENTS, but give their ids a suffix to keep them apart from tests.
+    const haveRp = {};
+    readAll('Judging').forEach(function (r) { if (String(r.kind) === 'roleplay') haveRp[norm(r.name)] = true; });
+    ROLEPLAY_EVENTS.filter(function (p) { return !haveRp[norm(p[0])]; }).forEach(function (p) {
+      rows.push({ id: slug(p[0]) + '-roleplay', name: p[0], category: 'Role plays', guide: GUIDE_BASE + p[1], rubric: '[]', presentMin: 7, qaMin: 0, prepMin: 20, format: '', note: '', updated: nowIso(), active: true, kind: 'roleplay', indicators: '[]' });
     });
     appendRows('Judging', rows);
     return { added: rows.length };
@@ -1499,13 +1525,25 @@ function loadRubric(j) {
   // Send the start (event format and times) and the rating sheet, not the whole document.
   const at = text.search(/(Presentation|Performance|Interview|Speech|Delivery)?\s*Rating Sheet/i);
   const part = at > 0 ? text.slice(0, 4000) + '\n...\n' + text.slice(Math.max(0, at - 200), at + 9000) : text.slice(0, 13000);
-  const prompt = [
+  const roleplay = j.kind === 'roleplay';
+  const prompt = roleplay ? [
+    'Below is text from the official FBLA (Future Business Leaders of America) 2026–27 competitive event guidelines for the role play event "' + j.name + '".',
+    'In the role play, competitors get a scenario, prepare, then perform it for judges who play a role and may ask questions. Return:',
+    '- presentMinutes: how long the role play performance may run, in minutes.',
+    '- prepMinutes: preparation time after receiving the scenario, in minutes.',
+    '- qaMinutes: 0.',
+    '- format: one sentence describing what competitors do in the role play and who the judges play.',
+    '- indicators: the event’s performance indicators (or competencies) that role play scenarios test, as written, up to 20.',
+    '- criteria: each line of the role play rating sheet, named as written, with its maximum points and a one-sentence description in your own words of what earns full points. Leave out penalty lines.',
+    '\nGuidelines:\n"""\n' + part + '\n"""',
+  ].join('\n') : [
     'Below is text from the official FBLA (Future Business Leaders of America) 2026–27 competitive event guidelines for "' + j.name + '".',
     'Find the part of the event that competitors perform live for judges (a presentation, speech, or interview) and its rating sheet. Return:',
     '- presentMinutes: the longest the presentation, speech, or interview may run, in minutes.',
     '- qaMinutes: minutes of judge questions after it (0 if there are none or they are included in presentMinutes).',
     '- prepMinutes: preparation time given at the event right before presenting (0 if none).',
     '- format: one sentence describing what competitors present and to whom.',
+    '- indicators: an empty list.',
     '- criteria: each line of the live presentation’s rating sheet, named as written, with its maximum points and a one-sentence description in your own words of what earns full points. Leave out penalty lines and lines that score a written report or prejudged submission.',
     '\nGuidelines:\n"""\n' + part + '\n"""',
   ].join('\n');
@@ -1513,9 +1551,10 @@ function loadRubric(j) {
     type: 'OBJECT',
     properties: {
       presentMinutes: { type: 'NUMBER' }, qaMinutes: { type: 'NUMBER' }, prepMinutes: { type: 'NUMBER' }, format: { type: 'STRING' },
+      indicators: { type: 'ARRAY', items: { type: 'STRING' } },
       criteria: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, points: { type: 'INTEGER' }, description: { type: 'STRING' } }, required: ['name', 'points', 'description'] } },
     },
-    required: ['presentMinutes', 'qaMinutes', 'prepMinutes', 'format', 'criteria'],
+    required: ['presentMinutes', 'qaMinutes', 'prepMinutes', 'format', 'indicators', 'criteria'],
   };
   const out = aiCall(prompt, schema, 0);
   const seen = {};
@@ -1528,13 +1567,15 @@ function loadRubric(j) {
   }
   const clamp = function (v, lo, hi, d) { const n = Number(v); return isFinite(n) && n >= lo && n <= hi ? Math.round(n * 2) / 2 : d; };
   const total = criteria.reduce(function (n, c) { return n + c.points; }, 0);
+  const indicators = (Array.isArray(out.indicators) ? out.indicators : []).map(function (x) { return String(x).trim().slice(0, 200); }).filter(String).slice(0, 20);
   const fresh = {
-    criteria: criteria, presentMin: clamp(out.presentMinutes, 1, 30, 7), qaMin: clamp(out.qaMinutes, 0, 15, 0), prepMin: clamp(out.prepMinutes, 0, 60, 0),
-    format: String(out.format || '').slice(0, 300), note: 'Loaded from the 2026–27 guidelines. The rating sheet is worth ' + total + ' points.',
+    criteria: criteria, presentMin: clamp(out.presentMinutes, 1, 30, 7), qaMin: roleplay ? 0 : clamp(out.qaMinutes, 0, 15, 0), prepMin: clamp(out.prepMinutes, 0, 60, roleplay ? 20 : 0),
+    format: String(out.format || '').slice(0, 300), indicators: indicators,
+    note: 'Loaded from the 2026–27 guidelines. The rating sheet is worth ' + total + ' points.',
   };
   withLock(function () {
     const row = readJudging().filter(function (x) { return x.id === j.id; })[0] || j;
-    writeRow('Judging', row._row, judgingRow(row, { rubric: JSON.stringify(fresh.criteria), presentMin: fresh.presentMin, qaMin: fresh.qaMin, prepMin: fresh.prepMin, format: fresh.format, note: fresh.note }));
+    writeRow('Judging', row._row, judgingRow(row, { rubric: JSON.stringify(fresh.criteria), presentMin: fresh.presentMin, qaMin: fresh.qaMin, prepMin: fresh.prepMin, format: fresh.format, note: fresh.note, indicators: JSON.stringify(indicators) }));
   });
   return Object.assign({}, j, fresh);
 }
@@ -1548,7 +1589,7 @@ function attemptsFor(email) {
 function judgeSummary(j, mine) {
   const rows = mine.filter(function (r) { return r.eventId === j.id; }).sort(function (a, b) { return String(b.submitted).localeCompare(String(a.submitted)); });
   return {
-    id: j.id, name: j.name, category: j.category, guide: j.guide, ready: j.criteria.length > 0,
+    id: j.id, name: j.name, category: j.category, guide: j.guide, ready: j.criteria.length > 0, kind: j.kind,
     presentMin: j.presentMin, qaMin: j.qaMin, prepMin: j.prepMin, format: j.format, note: j.note,
     attempts: rows.length, best: rows.length ? Math.max.apply(null, rows.map(function (r) { return Number(r.pct) || 0; })) : null,
     last: rows.length ? Number(rows[0].pct) || 0 : null,
@@ -1570,7 +1611,7 @@ function presentEvent(user, eventId) {
   const history = mine.filter(function (r) { return r.eventId === j.id; })
     .sort(function (a, b) { return String(b.submitted).localeCompare(String(a.submitted)); }).slice(0, 20)
     .map(function (r) { return { id: String(r.id), title: String(r.title || ''), submitted: String(r.submitted), pct: Number(r.pct) || 0, score: Number(r.score) || 0, max: Number(r.max) || 0, seconds: Number(r.seconds) || 0 }; });
-  return Object.assign(judgeSummary(j, mine), { criteria: j.criteria, history: history });
+  return Object.assign(judgeSummary(j, mine), { criteria: j.criteria, indicators: j.indicators, history: history });
 }
 
 /** A fresh speaking topic (Impromptu), job posting (Job Interview), or other prompt for events that hand one out. */
@@ -1682,6 +1723,11 @@ function judgePresentation(user, b) {
   const seconds = Math.max(0, Math.round(Number(b.seconds) || 0));
   const limit = Math.round((j.presentMin || 7) * 60);
   const stats = speechStats(transcript, seconds);
+  const roleplay = j.kind === 'roleplay';
+  const sc = b.scenario && typeof b.scenario === 'object' ? b.scenario : null;
+  const interjections = (Array.isArray(b.interjections) ? b.interjections : []).slice(0, 3).map(function (x) { return { q: String(x.q || '').slice(0, 400), at: Math.round(Number(x.at) || 0) }; });
+  const team = String(b.team || '').slice(0, 200);
+  const scenarioText = sc ? scenarioToText(sc) : '';
   const prompt = [
     'You are an experienced, fair FBLA judge scoring a practice run of the 2026–27 event "' + j.name + '". ' + (j.format ? 'Format: ' + j.format : ''),
     'Score it on this rating sheet. For each line give points from 0 to the maximum, a short exact quote (under 25 words) from the transcript as evidence, and one or two sentences on how to earn more points.',
@@ -1694,7 +1740,11 @@ function judgePresentation(user, b) {
     slides ? 'Slide text:\n"""\n' + slides + '\n"""' : '',
     'Transcript:\n"""\n' + transcript + '\n"""',
     qa.length ? 'Judge questions and answers:\n' + qa.map(function (x, i) { return 'Q' + (i + 1) + ': ' + x.q + '\nA' + (i + 1) + ': ' + (x.a || '(no answer)'); }).join('\n') : '',
-    'Also give 2 or 3 strengths, the 3 most important improvements, and a two-sentence overall comment written to the competitor.',
+    roleplay && scenarioText ? 'The role play scenario they were given:\n"""\n' + scenarioText + '\n"""' : '',
+    roleplay && interjections.length ? 'During the role play the judge interrupted with these questions (answered in the transcript around these times): ' + interjections.map(function (x) { return '"' + x.q + '" at ' + Math.floor(x.at / 60) + ':' + ('0' + (x.at % 60)).slice(-2); }).join('; ') + '. Judge how well they handled them.' : '',
+    roleplay && sc && Array.isArray(sc.indicators) && sc.indicators.length ? 'For each performance indicator in the scenario, say whether they covered it (covered true or false) with a short note.' : 'Return an empty indicators list.',
+    team ? 'This was a team of: ' + team + '. The transcript has no speaker labels, so only comment on teamwork if handoffs are clear from what was said.' : '',
+    'Also give 2 or 3 strengths, the 3 most important improvements, and a two-sentence overall comment written to the competitor' + (team ? 's' : '') + '.',
   ].filter(String).join('\n');
   const schema = {
     type: 'OBJECT',
@@ -1703,10 +1753,15 @@ function judgePresentation(user, b) {
       strengths: { type: 'ARRAY', items: { type: 'STRING' } },
       improvements: { type: 'ARRAY', items: { type: 'STRING' } },
       summary: { type: 'STRING' },
+      indicators: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, covered: { type: 'BOOLEAN' }, note: { type: 'STRING' } }, required: ['name', 'covered', 'note'] } },
     },
-    required: ['criteria', 'strengths', 'improvements', 'summary'],
+    required: ['criteria', 'strengths', 'improvements', 'summary', 'indicators'],
   };
   const out = aiCall(prompt, schema, 0.2);
+  const coverage = roleplay && sc && Array.isArray(sc.indicators) ? sc.indicators.map(function (name, i) {
+    const g = (out.indicators || []).filter(function (x) { return norm(x.name) === norm(name); })[0] || (out.indicators || [])[i] || {};
+    return { name: String(name), covered: !!g.covered, note: String(g.note || '').slice(0, 300) };
+  }) : [];
   const given = out && Array.isArray(out.criteria) ? out.criteria : [];
   const scored = j.criteria.map(function (c, i) {
     const g = given.filter(function (x) { return norm(x.name) === norm(c.name); })[0] || given[i] || {};
@@ -1727,6 +1782,7 @@ function judgePresentation(user, b) {
     score: score, max: max, pct: max ? Math.round((score / max) * 100) : 0, criteria: scored,
     strengths: (out.strengths || []).map(String).slice(0, 4), improvements: (out.improvements || []).map(String).slice(0, 4),
     summary: String(out.summary || '').slice(0, 800), qa: qa, mode: b.mode === 'typed' ? 'typed' : 'voice', prompt: String(b.prompt || '').slice(0, 1500),
+    kind: j.kind, scenario: sc, coverage: coverage, interjections: interjections, team: team,
   };
   const detail = Object.assign({}, result);
   delete detail.transcript;
@@ -1739,6 +1795,52 @@ function judgePresentation(user, b) {
   });
   result.transcript = transcript;
   return result;
+}
+
+/** Writes a fresh FBLA-style role play scenario from the event's performance indicators. */
+function roleplayScenario(eventId) {
+  const j = readJudging().filter(function (x) { return x.id === eventId; })[0];
+  if (!j) throw fail('not_found', 'That event isn’t available.');
+  const picks = shuffled(j.indicators).slice(0, 5);
+  const prompt = [
+    'Write a new practice role play scenario for the FBLA (Future Business Leaders of America) 2026–27 high school event "' + j.name + '", in the style of FBLA role play cards.',
+    j.format ? 'Event format: ' + j.format : '',
+    picks.length ? 'Build the scenario so competitors must show these performance indicators: ' + picks.join('; ') + '.' : 'Choose 4 or 5 performance indicators that fit this event and list them.',
+    'Use a realistic, fictional company or organization. Give enough detail (numbers, constraints, a clear problem) for a strong competitor to fill 7 minutes, but don’t give away the answer.',
+    'Return: title (a few words), background (the situation, 80 to 150 words), yourRole (who the competitors are), judgeRole (who the judge plays), task (what the competitors must do or recommend), and indicators (the performance indicators the judges will look for).',
+  ].filter(String).join('\n');
+  const out = aiCall(prompt, {
+    type: 'OBJECT',
+    properties: { title: { type: 'STRING' }, background: { type: 'STRING' }, yourRole: { type: 'STRING' }, judgeRole: { type: 'STRING' }, task: { type: 'STRING' }, indicators: { type: 'ARRAY', items: { type: 'STRING' } } },
+    required: ['title', 'background', 'yourRole', 'judgeRole', 'task', 'indicators'],
+  }, 0.9);
+  if (!out || !out.background || !out.task) throw fail('ai', 'The scenario didn’t come out right. Try again.');
+  return {
+    title: String(out.title || j.name).slice(0, 120), background: String(out.background).slice(0, 1500),
+    yourRole: String(out.yourRole || '').slice(0, 300), judgeRole: String(out.judgeRole || '').slice(0, 300), task: String(out.task).slice(0, 800),
+    indicators: (out.indicators || picks).map(String).filter(String).slice(0, 6),
+  };
+}
+function scenarioToText(sc) {
+  return [sc.title ? 'Title: ' + sc.title : '', 'Background: ' + (sc.background || ''), sc.yourRole ? 'Your role: ' + sc.yourRole : '', sc.judgeRole ? 'The judge plays: ' + sc.judgeRole : '', 'Task: ' + (sc.task || ''),
+    Array.isArray(sc.indicators) && sc.indicators.length ? 'Performance indicators: ' + sc.indicators.join('; ') : ''].filter(String).join('\n').slice(0, 3500);
+}
+
+/** The question a judge, in character, asks partway through the role play. */
+function roleplayInterject(eventId, sc, transcript, atSeconds) {
+  const j = readJudging().filter(function (x) { return x.id === eventId; })[0];
+  if (!j) throw fail('not_found', 'That event isn’t available.');
+  const prompt = [
+    'You are the judge in an FBLA "' + j.name + '" role play, playing this character: ' + String(sc.judgeRole || 'the business owner') + '.',
+    'Scenario:\n"""\n' + scenarioToText(sc) + '\n"""',
+    'The competitor has been speaking for about ' + Math.max(1, Math.round(atSeconds / 60)) + ' minutes. Here is what they have said so far:\n"""\n' + (transcript || '(nothing yet)').slice(-6000) + '\n"""',
+    'Interrupt with one short question, in character, that a real judge would ask now: push on something they just said, a cost or risk they skipped, or a performance indicator they haven’t covered yet. Under 25 words.',
+    'Return JSON: {"question": "..."}',
+  ].join('\n');
+  const out = aiCall(prompt, { type: 'OBJECT', properties: { question: { type: 'STRING' } }, required: ['question'] }, 0.7);
+  const q = String((out && out.question) || '').trim();
+  if (!q) throw fail('ai', 'No question.');
+  return { question: q.slice(0, 300) };
 }
 
 function presentResult(user, id) {
@@ -1834,14 +1936,15 @@ function setup() {
     sh.getRange(1, 1, 1, TABS[name].length).setValues([TABS[name]]).setFontWeight('bold');
   });
   const judging = seedJudging();
-  console.log('Added ' + judging.added + ' presentation events to the Judging tab.');
+  console.log('Added ' + judging.added + ' presentation and role play events to the Judging tab.');
   const seeded = seedFblaTests();
   console.log('Added ' + seeded.added + ' FBLA tests to the Events tab. Their topics load from the official guidelines on the timer, or click "Load all tests" on the Admin page.');
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'topUpBanks') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('topUpBanks').timeBased().everyMinutes(10).create();
-  const missing = ['GOOGLE_CLIENT_ID', 'GEMINI_API_KEY', 'ADMIN_EMAILS'].filter(function (k) { return !prop(k, ''); });
+  const missing = ['GOOGLE_CLIENT_ID', 'ADMIN_EMAILS'].filter(function (k) { return !prop(k, ''); });
+  if (!aiProvider()) missing.push('GROQ_API_KEY (or XAI_API_KEY or GEMINI_API_KEY)');
   console.log('Tabs ready and the top-up timer is on.' + (missing.length ? ' Still missing script properties: ' + missing.join(', ') : ' All required script properties are set.'));
 }
 

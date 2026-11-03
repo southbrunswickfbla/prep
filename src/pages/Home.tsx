@@ -94,6 +94,7 @@ export function Dashboard() {
         <div className="flex flex-wrap gap-3">
           <Link to="/practice" className={btn.gold}>Practice a test</Link>
           <Link to="/present" className={`${btn.quiet} bg-white/10 text-white hover:bg-white/20`}>Practice a presentation</Link>
+          <Link to="/roleplay" className={`${btn.quiet} bg-white/10 text-white hover:bg-white/20`}>Practice a role play</Link>
         </div>
       </section>
 
