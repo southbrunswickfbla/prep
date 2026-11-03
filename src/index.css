@@ -1,0 +1,74 @@
+@import "tailwindcss";
+@import "@fontsource-variable/archivo/wdth.css";
+
+/* Matches the chapter site: Archivo wide and bold, navy and gold, angled cut corners. */
+@theme {
+  --font-sans: "Archivo Variable", "Archivo", "Arial", system-ui, sans-serif;
+  --color-navy-950: #06122e;
+  --color-navy-900: #0b1f4d;
+  --color-navy-800: #13295e;
+  --color-navy-700: #1d3a7a;
+  --color-navy-200: #c3cde6;
+  --color-navy-100: #e3e8f5;
+  --color-blue: #1d52bc;
+  --color-gold: #f2b33d;
+  --color-gold-300: #f7cd72;
+  --color-gold-100: #fdf1d6;
+  --color-paper: #f4f5f9;
+  --color-line: #dce1ec;
+  --color-ink: #0d1a3a;
+  --color-ink-2: #4b5878;
+  --color-ink-3: #7a85a2;
+  --color-good: #167049;
+  --color-good-100: #ddf2e7;
+  --color-bad: #b3302a;
+  --color-bad-100: #fce8e5;
+  --breakpoint-xs: 420px;
+}
+
+@custom-variant short (@media (max-height: 760px));
+
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-stretch: 100%;
+  -webkit-font-smoothing: antialiased;
+}
+:focus-visible { outline: 3px solid var(--color-gold); outline-offset: 2px; }
+::selection { background: var(--color-gold-300); color: var(--color-navy-950); }
+
+@utility font-wide { font-stretch: 125%; }
+@utility font-semiwide { font-stretch: 112.5%; }
+
+/* Angled cut corners, top-left and bottom-right */
+@utility cut {
+  clip-path: polygon(16px 0, 100% 0, 100% calc(100% - 16px), calc(100% - 16px) 100%, 0 100%, 0 16px);
+}
+@utility cut-sm {
+  clip-path: polygon(9px 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%, 0 9px);
+}
+@utility cut-lg {
+  clip-path: polygon(28px 0, 100% 0, 100% calc(100% - 28px), calc(100% - 28px) 100%, 0 100%, 0 28px);
+}
+
+/* Navy ledger paper: ruled lines, a gold margin rule, soft glows */
+@utility ledger {
+  background-color: var(--color-navy-900);
+  background-image:
+    radial-gradient(600px 320px at 88% 0%, rgb(29 82 188 / 0.55), transparent 70%),
+    radial-gradient(420px 260px at 0% 100%, rgb(242 179 61 / 0.14), transparent 70%),
+    linear-gradient(90deg, transparent 54px, rgb(242 179 61 / 0.55) 54px, rgb(242 179 61 / 0.55) 56px, transparent 56px),
+    repeating-linear-gradient(180deg, transparent 0 31px, rgb(255 255 255 / 0.07) 31px 32px);
+}
+
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@utility animate-rise { animation: rise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes pulse-ring { from { box-shadow: 0 0 0 0 rgb(242 179 61 / 0.6); } to { box-shadow: 0 0 0 14px rgb(242 179 61 / 0); } }
+@utility animate-ring { animation: pulse-ring 1.2s ease-out 2; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
