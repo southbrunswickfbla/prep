@@ -6,6 +6,7 @@ import { mainSite } from '../lib/config';
 import { eventMastery, LEVEL_LABEL, LEVELS, plural, savedLevel, saveLevel, topicMastery } from '../lib/format';
 import { CONNECT_URL, STUDY_LABEL, STUDY_LINKS } from '../data/studyLinks';
 import { Bar, btn, External, Loading, Notice, PageHead } from '../components/Layout';
+import { RowSections, ScorePip } from '../components/Bits';
 import type { Level, Mode, StartRes } from '../types';
 
 export const SESSION_KEY = 'fblaprep.session';
@@ -24,7 +25,7 @@ const rank = (g: string) => (ORDER.indexOf(g) < 0 ? 99 : ORDER.indexOf(g));
 export function EventList() {
   const { data, loading, error } = useData();
   const [q, setQ] = useState('');
-  if (loading && !data) return <Loading label="Loading events…" />;
+  if (loading && !data) return <Loading label="Loading tests…" />;
   if (error && !data) return <Notice tone="bad">{error}</Notice>;
   if (!data) return null;
 
@@ -33,43 +34,26 @@ export function EventList() {
   const groups = [...new Set(list.map((e) => e.category || 'Other'))].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 
   return (
-    <div className="animate-rise">
+    <div>
       <PageHead
-        title="Pick your event"
-        sub={<>Every FBLA event with an objective test, built from the official 2026–27 guidelines. Not sure which to take? Try the <External href={mainSite.eventFinder} className={btn.link}>Event Finder</External>.</>}
+        title="Tests"
+        sub={<>Not sure which event? Try the <External href={mainSite.eventFinder} className={btn.link}>Event Finder</External>.</>}
+        right={<input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tests" aria-label="Search tests" className="cut-sm w-72 max-w-full border-0 bg-white px-4 py-3 text-[16px] outline-none inset-ring-1 inset-ring-line focus:inset-ring-2 focus:inset-ring-gold" />}
       />
-      <input
-        type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search events" aria-label="Search events"
-        className="cut-sm w-full max-w-md border-0 bg-white px-4 py-3 text-[16px] outline-none inset-ring-1 inset-ring-line focus:inset-ring-2 focus:inset-ring-gold"
-      />
-      {data.events.length === 0 && <div className="mt-8"><Notice>No events are set up yet. An officer can load them on the Admin page.</Notice></div>}
-      {data.events.length > 0 && list.length === 0 && <p className="mt-8 text-ink-2">No events match “{q}”.</p>}
-      {groups.map((g) => (
-        <section key={g} className="mt-10">
-          <h2 className="font-semiwide text-[15px] font-extrabold text-ink-2">{g}</h2>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {list.filter((e) => (e.category || 'Other') === g).map((e) => {
-              const m = eventMastery(data.mastery, e.id);
-              const ready = e.topics.length > 0;
-              const bests = data.bests.filter((b) => b.eventId === e.id);
-              return (
-                <Link key={e.id} to={`/practice/${e.id}`} className={`cut group block bg-white p-5 transition hover:bg-navy-100/40 ${ready ? '' : 'opacity-60'}`}>
-                  <div className="font-semiwide text-[17px] font-extrabold text-navy-950 group-hover:text-blue">{e.name}</div>
-                  <div className="mt-1 text-[14px] text-ink-2">{ready ? `${plural(e.topics.length, 'topic')}, ${plural(e.bank, 'question')} so far` : 'Topics are loading'}</div>
-                  {m.pct !== null && <div className="mt-3 flex items-center gap-3"><Bar pct={m.pct} /><span className="w-12 text-right text-[14px] font-bold">{m.pct}%</span></div>}
-                  {bests.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {LEVELS.filter((l) => bests.some((b) => b.level === l.id)).map((l) => (
-                        <span key={l.id} className="cut-sm bg-navy-100 px-2 py-0.5 text-[12px] font-black text-navy-900">{l.label} best {bests.find((b) => b.level === l.id)!.best}%</span>
-                      ))}
-                    </div>
-                  )}
-                </Link>
-              );
-            })}
-          </div>
-        </section>
-      ))}
+      {data.events.length === 0 && <Notice>No tests yet. An officer can load them from Admin.</Notice>}
+      {data.events.length > 0 && list.length === 0 && <p className="text-ink-2">No tests match “{q}”.</p>}
+      <RowSections sections={groups.map((g) => ({
+        title: g,
+        rows: list.filter((e) => (e.category || 'Other') === g).map((e) => {
+          const m = eventMastery(data.mastery, e.id);
+          const best = LEVELS.map((l) => data.bests.find((b) => b.eventId === e.id && b.level === l.id)).filter(Boolean).pop();
+          return {
+            key: e.id, to: `/practice/${e.id}`, name: e.name, dim: !e.topics.length,
+            meta: !e.topics.length ? 'Loading topics' : best ? `${best.level.toUpperCase()} test best ${best.best}%` : m.attempts ? `${plural(m.attempts, 'question')} answered` : `${plural(e.topics.length, 'topic')}`,
+            right: <ScorePip pct={m.pct} />,
+          };
+        }),
+      }))} />
     </div>
   );
 }
@@ -134,30 +118,22 @@ export function EventDetail() {
   const bests = data.bests.filter((b) => b.eventId === event.id);
   const lv = LEVEL_LABEL[level];
   const modes: { mode: Mode; title: string; body: string; note?: string; disabled?: boolean }[] = [
-    { mode: 'drill', title: 'Quick drill', body: `10 ${lv}-level questions from every topic, checked as you go, with explanations.` },
-    { mode: 'weak', title: 'Weak-spot drill', body: `10 ${lv}-level questions, mostly from the topics you miss most.`, note: practiced ? undefined : 'Do a quick drill first so it knows your weak spots.', disabled: !practiced },
-    { mode: 'review', title: 'Mistake review', body: 'Questions you got wrong before. Each one leaves the list once you get it right.', note: missed ? `${plural(missed, 'question')} waiting.` : 'Nothing to review yet.', disabled: !missed },
+    { mode: 'drill', title: 'Quick drill', body: `10 ${lv} questions, checked as you go.` },
+    { mode: 'weak', title: 'Weak spots', body: `10 ${lv} questions from the topics you miss most.`, note: practiced ? undefined : 'Do a quick drill first.', disabled: !practiced },
+    { mode: 'review', title: 'Mistakes', body: 'Questions you got wrong, until you get them right.', note: missed ? `${plural(missed, 'question')} waiting` : 'Nothing to review', disabled: !missed },
   ];
 
   return (
     <div className="animate-rise">
-      <Link to="/practice" className="text-[14px] font-bold text-ink-2 hover:text-navy-950">All events</Link>
-      <div className="mt-3">
-        <PageHead
-          title={event.name}
-          sub={<>{event.category || 'Practice'}. Topics and question counts come from FBLA’s official 2026–27 guidelines.</>}
-        />
-      </div>
+      <PageHead title={event.name} back={{ to: '/practice', label: 'Tests' }} />
 
-      {!ready && <Notice>This event’s topics are still loading from the guidelines. Check back in a few minutes.</Notice>}
+      {!ready && <Notice>Topics are still loading. Check back in a few minutes.</Notice>}
       {startError && <div className="mb-6"><Notice tone="bad">{startError}</Notice></div>}
-      {starting && <div className="mb-6"><Notice tone="gold">Getting your questions ready. If the AI has to write new ones, this can take up to 30 seconds.</Notice></div>}
+      {starting && <div className="mb-6"><Notice tone="gold">Getting your questions ready. New ones can take up to 30 seconds.</Notice></div>}
 
       {ready && (
         <>
           <section>
-            <h2 className="font-semiwide text-lg font-extrabold text-navy-950">Level</h2>
-            <p className="mb-3 text-[14px] text-ink-2">Start at RCE and move up as your scores climb. Everything below uses the level you pick.</p>
             <LevelPicker value={level} onChange={pickLevel} />
           </section>
 
@@ -175,54 +151,55 @@ export function EventDetail() {
                 )}
               </div>
               <p className="mt-2 flex-1 text-[15px] text-navy-100">
-                {event.bank >= 100 ? '100 questions in 50 minutes' : `${Math.min(100, event.bank)} questions so far, timed to match`}, split across topics like the real test. Answers stay hidden until you submit.
+                {event.bank >= 100 ? '100 questions, 50 minutes' : `${Math.min(100, event.bank)} questions so far, timed to match`}, split like the real test.
               </p>
               <button className={`${btn.gold} mt-5 self-start`} disabled={!!starting || event.bank < 10} onClick={() => start('full')}>
                 {starting === 'full' ? 'Starting…' : `Start the ${lv} test`}
               </button>
-              {event.bank < 10 && <p className="mt-3 text-[14px] font-semibold text-gold-300">Questions are still being written. Try a quick drill in the meantime.</p>}
+              {event.bank < 10 && <p className="mt-3 text-[14px] font-semibold text-gold-300">Still writing questions. Try a drill first.</p>}
             </div>
 
             <div className="cut bg-white p-6">
-              <h2 className="font-semiwide text-lg font-extrabold text-navy-950">Study resources</h2>
+              <h2 className="font-semiwide text-lg font-extrabold text-navy-950">Study</h2>
               <ul className="mt-3 grid gap-2.5 text-[15px]">
-                {event.guide && <li><External href={event.guide} className={btn.link}>Official 2026–27 guidelines</External></li>}
-                {study && <li><External href={study.url} className={btn.link}>{STUDY_LABEL[study.kind]}</External> <span className="text-ink-2">from the CE team</span></li>}
-                <li><External href={CONNECT_URL} className={btn.link}>Official sample questions</External> <span className="text-ink-2">in FBLA Connect</span></li>
-                <li><External href={mainSite.competitions(event.name)} className={btn.link}>This event on the chapter site</External></li>
+                {event.guide && <li><External href={event.guide} className={btn.link}>2026–27 guidelines</External></li>}
+                {study && <li><External href={study.url} className={btn.link}>{STUDY_LABEL[study.kind]}</External></li>}
+                <li><External href={CONNECT_URL} className={btn.link}>Sample questions (FBLA Connect)</External></li>
+                <li><External href={mainSite.competitions(event.name)} className={btn.link}>Chapter site page</External></li>
               </ul>
-              <p className="mt-4 text-[14px] text-ink-2">Each topic below also has an AI study guide.</p>
             </div>
           </section>
 
-          <section className="mt-6 grid gap-4 md:grid-cols-3">
-            {modes.map((m) => (
-              <div key={m.mode} className="cut flex flex-col bg-white p-6">
-                <h2 className="font-semiwide text-lg font-extrabold text-navy-950">{m.title}</h2>
-                <p className="mt-2 flex-1 text-[15px] text-ink-2">{m.body}</p>
-                {m.note && <p className="mt-3 text-[14px] font-semibold text-navy-700">{m.note}</p>}
-                <button className={`${btn.navy} mt-5`} disabled={!!starting || m.disabled} onClick={() => start(m.mode)}>
-                  {starting === m.mode ? 'Starting…' : 'Start'}
-                </button>
-              </div>
-            ))}
+          <section className="mt-12">
+            <div className="border-b-[3px] border-navy-900 pb-2"><h2 className="font-wide text-[19px] font-black text-navy-950">Drills</h2></div>
+            <ul>
+              {modes.map((m) => (
+                <li key={m.mode} className="grid items-center gap-3 border-b border-line py-4 sm:grid-cols-[180px_1fr_auto]">
+                  <span className="font-bold text-navy-950">{m.title}</span>
+                  <span className="text-[15px] text-ink-2">{m.body}{m.note ? <span className="ml-2 font-semibold text-navy-700">{m.note}</span> : null}</span>
+                  <button className={btn.navy} disabled={!!starting || m.disabled} onClick={() => start(m.mode)}>{starting === m.mode ? 'Starting…' : 'Start'}</button>
+                </li>
+              ))}
+            </ul>
           </section>
 
           <section className="mt-12">
-            <h2 className="font-semiwide text-2xl font-extrabold text-navy-950">Topics</h2>
-            <p className="mt-1 text-ink-2">The knowledge areas FBLA lists for this test. Read the study guide, then drill the topic at your level.</p>
-            <div className="cut mt-4 divide-y divide-line bg-white">
+            <div className="flex items-baseline justify-between border-b-[3px] border-navy-900 pb-2">
+              <h2 className="font-wide text-[19px] font-black text-navy-950">Topics</h2>
+              <span className="font-wide text-[15px] font-black tabular-nums text-ink-3">{event.topics.length}</span>
+            </div>
+            <div className="divide-y divide-line">
               {event.topics.map((t) => {
                 const m = topicMastery(data.mastery, event.id, t.name);
                 return (
-                  <div key={t.name} className="grid items-center gap-3 px-5 py-4 md:grid-cols-[1fr_200px_auto]">
+                  <div key={t.name} className="grid items-center gap-3 py-4 md:grid-cols-[1fr_200px_auto]">
                     <div>
                       <div className="font-bold text-navy-950">{t.name}</div>
-                      <div className="text-[13px] text-ink-2">{t.items ? `${t.items} questions on the real test, ` : t.weight ? `${t.weight}% of the test, ` : ''}{plural(event.bankByTopic[t.name] || 0, 'practice question')} written</div>
+                      <div className="text-[13px] text-ink-2">{t.items ? `${t.items} of 100 on the real test` : t.weight ? `${t.weight}% of the test` : ''}</div>
                     </div>
                     <div className="flex items-center gap-3">
                       <Bar pct={m.pct} />
-                      <span className="w-24 text-right text-[13px] font-bold text-ink-2">{m.pct === null ? 'Not tried' : `${m.pct}% of ${m.attempts}`}</span>
+                      <span className="w-28 whitespace-nowrap text-right text-[13px] font-bold text-ink-2">{m.pct === null ? 'Not tried' : `${m.pct}% of ${m.attempts}`}</span>
                     </div>
                     <div className="flex gap-2">
                       <Link to={`/study/${event.id}/${encodeURIComponent(t.name)}`} className={btn.quiet}>Study</Link>

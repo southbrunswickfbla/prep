@@ -45,14 +45,22 @@ export function Loading({ label = 'Loading…' }: { label?: string }) {
   );
 }
 
-export function PageHead({ title, sub, right }: { title: string; sub?: ReactNode; right?: ReactNode }) {
+export function PageHead({ title, sub, right, back }: { title: string; sub?: ReactNode; right?: ReactNode; back?: { to: string; label: string } }) {
   return (
-    <div className="mb-8 flex flex-wrap items-end justify-between gap-4 short:mb-5">
-      <div>
-        <h1 className="font-wide text-[clamp(30px,5vw,48px)] font-black leading-[0.98] tracking-tight text-navy-950">{title}</h1>
-        {sub && <p className="mt-3 max-w-[62ch] text-[17px] text-ink-2">{sub}</p>}
+    <div className="mb-10 short:mb-6">
+      {back && (
+        <Link to={back.to} className="mb-4 inline-flex items-center gap-1.5 text-[14px] font-bold text-ink-2 hover:text-navy-950">
+          <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true"><path d="M13 8H4M8 3.5 3.5 8 8 12.5" /></svg>
+          {back.label}
+        </Link>
+      )}
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="font-wide text-[clamp(32px,5.4vw,56px)] font-black leading-[0.95] tracking-[-0.02em] text-navy-950">{title}</h1>
+          {sub && <p className="mt-3 max-w-[56ch] text-[17px] text-ink-2">{sub}</p>}
+        </div>
+        {right}
       </div>
-      {right}
     </div>
   );
 }
@@ -92,7 +100,7 @@ function Header() {
     `whitespace-nowrap px-3 py-2 text-[15px] font-bold transition ${isActive ? 'text-navy-950 shadow-[inset_0_-3px_0_var(--color-gold)]' : 'text-ink-2 hover:text-navy-950'}`;
 
   return (
-    <header className={`sticky top-0 z-30 transition-transform duration-300 ${hidden ? '-translate-y-full' : ''} ${scrolled ? 'bg-white/80 shadow-[0_1px_0_var(--color-line)] backdrop-blur-md' : 'bg-paper'}`}>
+    <header className={`sticky top-0 z-30 transition-transform duration-300 ${hidden ? '-translate-y-full' : ''} ${scrolled ? 'bg-white/85 shadow-[0_1px_0_var(--color-line)] backdrop-blur-md' : 'bg-paper'}`}>
       <div className="mx-auto flex h-[76px] max-w-6xl items-center gap-3 px-5 short:h-[64px]">
         <Link to="/" className="flex items-center gap-3" aria-label="FBLA Prep home">
           <Logo />
@@ -142,29 +150,15 @@ function useOptionalAdmin(): { admin: boolean } | null {
 
 function Footer() {
   return (
-    <footer className="ledger mt-24 text-white">
-      <div className="mx-auto grid max-w-6xl gap-8 px-5 py-12 pl-[84px] sm:grid-cols-[1.4fr_1fr_1fr]">
-        <div>
-          <Logo light />
-          <p className="mt-4 max-w-sm text-[15px] text-navy-200">Practice tests for South Brunswick High School FBLA members. Questions are written by AI, so report anything that looks wrong.</p>
-        </div>
-        <div>
-          <p className="font-semiwide text-[15px] font-extrabold text-gold">Chapter site</p>
-          <ul className="mt-3 space-y-2 text-[15px] text-navy-100">
-            <li><External href={mainSite.competitions()} className="hover:text-white">Competitions and guidelines</External></li>
-            <li><External href={mainSite.eventFinder} className="hover:text-white">Event Finder</External></li>
-            <li><External href={mainSite.schedule} className="hover:text-white">Events and sign-ups</External></li>
-          </ul>
-        </div>
-        <div>
-          <p className="font-semiwide text-[15px] font-extrabold text-gold">Prep</p>
-          <ul className="mt-3 space-y-2 text-[15px] text-navy-100">
-            <li><Link to="/practice" className="hover:text-white">Test practice</Link></li>
-            <li><Link to="/present" className="hover:text-white">Presentation judge</Link></li>
-            <li><Link to="/roleplay" className="hover:text-white">Role play judge</Link></li>
-            <li><Link to="/progress" className="hover:text-white">Your progress</Link></li>
-          </ul>
-        </div>
+    <footer className="ledger mt-28 text-white">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-6 px-5 py-10 pl-[84px]">
+        <Logo light />
+        <nav className="flex flex-wrap gap-x-6 gap-y-2 text-[15px] font-semibold text-navy-100" aria-label="Chapter site">
+          <External href={mainSite.competitions()} className="hover:text-white">Competitions</External>
+          <External href={mainSite.eventFinder} className="hover:text-white">Event Finder</External>
+          <External href={mainSite.schedule} className="hover:text-white">Events</External>
+          <External href={mainSite.home} className="hover:text-white">Chapter site</External>
+        </nav>
       </div>
     </footer>
   );
@@ -174,9 +168,7 @@ export function Layout() {
   return (
     <div className="flex min-h-dvh flex-col">
       {DEMO && (
-        <div className="bg-gold px-5 py-2 text-center text-[14px] font-bold text-navy-950">
-          Demo mode: sample questions only, saved on this device. Connect the backend to go live.
-        </div>
+        <div className="bg-gold px-5 py-2 text-center text-[14px] font-bold text-navy-950">Demo mode. Sample content, saved on this device only.</div>
       )}
       <Header />
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 pt-8 short:pt-5">

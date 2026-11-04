@@ -91,7 +91,7 @@ export function Results() {
             ))}
           </div>
         </div>
-        {items.length === 0 && <p className="mt-4 text-ink-2">You didn’t miss any. Try a full practice test next.</p>}
+        {items.length === 0 && <p className="mt-4 text-ink-2">None missed.</p>}
         <ol className="mt-4 grid gap-4">
           {items.map((r) => (
             <li key={r.id} className="cut bg-white p-6">
@@ -126,10 +126,10 @@ export function Progress() {
 
   return (
     <div className="animate-rise">
-      <PageHead title="Your progress" sub="Percent correct by topic, across every drill and practice test you’ve finished." />
+      <PageHead title="Progress" sub="Percent correct by topic." />
       {practiced.length === 0 && (
         <div className="cut bg-white p-6">
-          <p className="text-ink-2">Nothing yet. Finish a drill and your topics show up here.</p>
+          <p className="text-ink-2">Finish a drill to see your topics here.</p>
           <Link to="/practice" className={`${btn.navy} mt-5`}>Pick an event</Link>
         </div>
       )}

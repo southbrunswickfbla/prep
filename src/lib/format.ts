@@ -16,9 +16,9 @@ export function plural(n: number, word: string, many?: string): string { return 
 export const MODE_LABEL: Record<Mode, string> = { drill: 'Quick drill', weak: 'Weak-spot drill', full: 'Full practice test', review: 'Mistake review' };
 
 export const LEVELS: { id: Level; label: string; name: string; desc: string }[] = [
-  { id: 'rce', label: 'RCE', name: 'Regional', desc: 'Fundamentals: key terms, definitions, and one-step questions.' },
-  { id: 'slc', label: 'SLC', name: 'State', desc: 'Applied: short scenarios, close concepts, and quick calculations.' },
-  { id: 'nlc', label: 'NLC', name: 'National', desc: 'Hardest: multi-step problems and very close answer choices.' },
+  { id: 'rce', label: 'RCE', name: 'Regional', desc: 'Key terms and one-step questions' },
+  { id: 'slc', label: 'SLC', name: 'State', desc: 'Scenarios and quick math' },
+  { id: 'nlc', label: 'NLC', name: 'National', desc: 'Multi-step problems, close choices' },
 ];
 export const LEVEL_LABEL: Record<Level, string> = { rce: 'RCE', slc: 'SLC', nlc: 'NLC' };
 

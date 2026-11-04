@@ -62,7 +62,7 @@ function EventEditor({ ev, target, onChanged }: { ev: EventSummary; target: numb
           </div>
 
           <h3 className="mt-6 font-semiwide text-[16px] font-extrabold text-navy-950">Topics (knowledge areas)</h3>
-          <p className="text-[14px] text-ink-2">Weights should add up to 100. They decide how a full practice test is split, matching the real test’s question counts.</p>
+          <p className="text-[14px] text-ink-2">Weights should total 100.</p>
           <div className="mt-3 grid gap-2">
             {topics.map((t, i) => (
               <div key={i} className="grid gap-2 sm:grid-cols-[1.2fr_90px_1.6fr_auto]">
@@ -228,15 +228,14 @@ export function Admin() {
 
   return (
     <div className="animate-rise">
-      <PageHead title="Admin" sub="Set up events and topics, keep the question bank full, and review questions members reported." />
+      <PageHead title="Admin" />
       {!ov.aiReady && <div className="mb-6"><Notice tone="bad">The AI isn’t connected. Add GROQ_API_KEY (or XAI_API_KEY or GEMINI_API_KEY) in the Apps Script project’s Script properties.</Notice></div>}
       {ov.aiReady && <p className="mb-6 text-[14px] text-ink-2">AI model: <b>{ov.model}</b>. Bank target: {ov.target} questions per topic.</p>}
 
       <section className="cut bg-navy-900 p-6 text-white">
         <h2 className="font-semiwide text-xl font-extrabold text-gold">FBLA 2026–27 tests</h2>
         <p className="mt-1 max-w-[70ch] text-[15px] text-navy-100">
-          Adds all 45 events that have an objective test (31 objective tests, 12 role plays, Business Ethics, and Future Business Leader).
-          The AI reads each one’s official guidelines and saves its knowledge areas and question counts. Then questions start writing on their own.
+          All 45 events with a test, loaded from the official guidelines.
         </p>
         <p className="mt-3 text-[14px] font-bold text-gold-300">
           {ov.events.filter((e) => e.guide && e.topics.length).length} of {ov.events.filter((e) => e.guide).length || 45} tests have their topics.
@@ -261,9 +260,9 @@ export function Admin() {
       </section>
 
       <section className="cut mt-6 bg-navy-900 p-6 text-white">
-        <h2 className="font-semiwide text-xl font-extrabold text-gold">Presentation events</h2>
+        <h2 className="font-semiwide text-xl font-extrabold text-gold">Presentations and role plays</h2>
         <p className="mt-1 max-w-[70ch] text-[15px] text-navy-100">
-          The presentation judge reads each event’s rating sheet and time limits from the official guidelines. Each one also loads the first time a member opens it, so this is only needed to get them all ready ahead of time.
+          Rating sheets and time limits for 44 events. Each also loads when first opened.
         </p>
         {judging && <p className="mt-3 text-[14px] font-bold text-gold-300">{judging.ready} of {judging.total} rating sheets loaded.</p>}
         <button className={`${btn.gold} mt-4`} disabled={!!jLoad?.running} onClick={() => void loadAllJudging()}>
@@ -274,7 +273,7 @@ export function Admin() {
 
       <section className="cut mt-6 bg-white p-6">
         <h2 className="font-semiwide text-xl font-extrabold text-navy-950">Add other events</h2>
-        <p className="mt-1 text-[14px] text-ink-2">Only needed for events that aren’t one of the 45 above. One name per line, then open each one below and add its topics.</p>
+        <p className="mt-1 text-[14px] text-ink-2">For events not in the 45. One per line.</p>
         <textarea className={`${input} mt-3 min-h-28`} value={names} onChange={(e) => setNames(e.target.value)} placeholder={'Event name'} />
         <button className={`${btn.navy} mt-3`} disabled={!!busy || !names.trim()} onClick={async () => {
           setBusy('add');
@@ -287,7 +286,7 @@ export function Admin() {
 
       <section className="mt-10">
         <h2 className="font-semiwide text-2xl font-extrabold text-navy-950">Chapter readiness</h2>
-        <p className="mt-1 text-[14px] text-ink-2">Totals across members, with no names. Full-test scores show the average and best at each level.</p>
+        <p className="mt-1 text-[14px] text-ink-2">Chapter totals, no names.</p>
         {!ready ? <Loading label="Adding up practice…" /> : ready.filter((r) => r.members > 0).length === 0 ? (
           <p className="mt-4 text-ink-2">Nobody has practiced yet.</p>
         ) : (
@@ -328,7 +327,7 @@ export function Admin() {
 
       <section className="mt-12">
         <h2 className="font-semiwide text-2xl font-extrabold text-navy-950">Reported questions ({ov.flagged.length})</h2>
-        <p className="mt-1 text-[14px] text-ink-2">A question is hidden from members after two reports. Restore it if it’s fine, or delete it.</p>
+        <p className="mt-1 text-[14px] text-ink-2">Hidden after two reports.</p>
         {ov.flagged.length === 0 && <p className="mt-4 text-ink-2">Nothing reported.</p>}
         <div className="mt-4 grid gap-4">
           {ov.flagged.map((q) => (

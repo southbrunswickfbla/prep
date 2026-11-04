@@ -68,12 +68,12 @@ export function Study() {
       {t?.items ? <p className="mt-2 text-[15px] text-ink-2">{t.items} questions on the real test.</p> : null}
 
       {error && <div className="mt-6"><Notice tone="bad">{error}</Notice></div>}
-      {!notes && !error && <Loading label="Writing the study guide. The first time takes about 15 seconds." />}
+      {!notes && !error && <Loading label="Writing the study guide…" />}
       {notes && (
         <article className="cut mt-6 bg-white p-6 sm:p-8">
           <Markdown text={notes.content} />
           <p className="mt-8 border-t border-line pt-4 text-[13px] text-ink-3">
-            Written by AI from the official guidelines on {shortDate(notes.updated)}. Check anything that looks off against the guidelines or your chapter’s study folder.
+            Written {shortDate(notes.updated)} from the 2026–27 guidelines.
           </p>
         </article>
       )}

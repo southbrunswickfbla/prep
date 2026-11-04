@@ -91,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     connectAuth(() => tokenRef.current, () => {
       clear();
-      setError('Your sign-in expired. Sign in again to keep going. Your answers are saved on this device.');
+      setError('Your sign-in expired. Sign in again. Your answers are saved.');
     });
   }, [clear]);
 

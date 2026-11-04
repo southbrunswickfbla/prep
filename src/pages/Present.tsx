@@ -4,6 +4,7 @@ import { api, errorText } from '../lib/api';
 import { clock, plural, shortDate } from '../lib/format';
 import { blobToBase64, recordingSupported, speak, stopSpeaking, useRecorder, type Recording } from '../lib/recorder';
 import { Bar, btn, External, Loading, Notice, PageHead } from '../components/Layout';
+import { RowSections, ScorePip } from '../components/Bits';
 import type { JudgeEvent, JudgeEventDetail, PresentResult, Scenario, Transcript } from '../types';
 
 const ORDER = ['Role plays', 'Presentation events', 'Speaking and interview events', '9th & 10th grade presentations', 'Chapter events'];
@@ -40,40 +41,22 @@ export function PresentList({ kind = 'presentation' }: { kind?: 'presentation' |
   const groups = [...new Set(list.map((e) => e.category || 'Presentation events'))].sort((a, b) => rank(a) - rank(b));
 
   return (
-    <div className="animate-rise">
-      {kind === 'roleplay' ? (
-        <PageHead
-          title="Role play judge"
-          sub="Get a fresh scenario, prep with the real timer, then perform out loud while an AI judge plays the role and interrupts with questions. You’re scored on the official 2026–27 rating sheet and the performance indicators you covered."
-        />
-      ) : (
-        <PageHead
-          title="Presentation judge"
-          sub="Present out loud, answer an AI judge’s questions, and get scored on your event’s official 2026–27 rating sheet, with a quote from what you said for every line."
-        />
-      )}
-      <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search events" aria-label="Search events" className={`${input} max-w-md bg-white`} />
-      {list.length === 0 && !q && <div className="mt-8"><Notice>These events aren’t set up yet. An officer can add them by running setup again in Apps Script.</Notice></div>}
-      {groups.map((g) => (
-        <section key={g} className="mt-10">
-          <h2 className="font-semiwide text-[15px] font-extrabold text-ink-2">{g}</h2>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {list.filter((e) => (e.category || 'Presentation events') === g).map((e) => (
-              <Link key={e.id} to={`${base(kind)}/${e.id}`} className="cut group block bg-white p-5 transition hover:bg-navy-100/40">
-                <div className="font-semiwide text-[17px] font-extrabold text-navy-950 group-hover:text-blue">{e.name}</div>
-                <div className="mt-1 text-[14px] text-ink-2">{e.ready ? timing(e) : 'The rating sheet loads the first time you open it'}</div>
-                {e.attempts > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    <span className="cut-sm bg-navy-100 px-2 py-0.5 text-[12px] font-black text-navy-900">Best {e.best}%</span>
-                    <span className="cut-sm bg-navy-100 px-2 py-0.5 text-[12px] font-black text-navy-900">Last {e.last}%</span>
-                    <span className="text-[12px] font-bold text-ink-3">{plural(e.attempts, 'run')}</span>
-                  </div>
-                )}
-              </Link>
-            ))}
-          </div>
-        </section>
-      ))}
+    <div>
+      <PageHead
+        title={kind === 'roleplay' ? 'Role plays' : 'Presentations'}
+        sub={kind === 'roleplay' ? 'New scenario, real prep time, a judge who interrupts.' : 'Present out loud. Get scored on the official rating sheet.'}
+        right={<input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search events" aria-label="Search events" className="cut-sm w-72 max-w-full border-0 bg-white px-4 py-3 text-[16px] outline-none inset-ring-1 inset-ring-line focus:inset-ring-2 focus:inset-ring-gold" />}
+      />
+      {list.length === 0 && !q && <Notice>These events aren’t set up yet. An officer can run setup again in Apps Script.</Notice>}
+      {list.length === 0 && q && <p className="text-ink-2">No events match “{q}”.</p>}
+      <RowSections sections={groups.map((g) => ({
+        title: g,
+        rows: list.filter((e) => (e.category || 'Presentation events') === g).map((e) => ({
+          key: e.id, to: `${base(kind)}/${e.id}`, name: e.name,
+          meta: e.ready ? timing(e) : 'Rating sheet loads when you open it',
+          right: e.attempts ? <ScorePip pct={e.best} /> : <ScorePip pct={null} />,
+        })),
+      }))} />
     </div>
   );
 }
@@ -376,7 +359,7 @@ export function PresentEvent() {
           <div className="cut mt-5 bg-gold p-6 text-navy-950 animate-rise" role="alert">
             <p className="text-[13px] font-black">The judge interrupts</p>
             <p className="mt-1 font-semiwide text-[20px] font-bold leading-snug">“{interjections[interjections.length - 1].q}”</p>
-            <p className="mt-2 text-[14px] font-semibold">Answer it out loud, then keep going.{mode === 'typed' ? ' Type your answer into your script.' : ''}</p>
+            <p className="mt-2 text-[14px] font-semibold">{mode === 'typed' ? 'Answer it in your script, then keep going.' : 'Answer it, then keep going.'}</p>
           </div>
         )}
 
@@ -386,7 +369,7 @@ export function PresentEvent() {
             {step === 'prep' ? (
               <label className="cut grid content-start gap-2 bg-white p-6 text-[13px] font-bold text-ink-2">
                 Your notes
-                <span className="font-normal">FBLA gives you two notecards. Jot what you’d put on them.</span>
+                <span className="font-normal">Two notecards’ worth.</span>
                 <textarea className={`${input} min-h-56 text-[15px] font-normal`} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Key points, numbers, your recommendation…" />
               </label>
             ) : notes.trim() ? (
@@ -446,7 +429,7 @@ export function PresentEvent() {
   if (step === 'review' && transcript) {
     return (
       <div className="mx-auto max-w-3xl animate-rise">
-        <PageHead title="Here’s what the judge heard" sub="Check that the transcript looks right. If a word or two is off, fix it here so you’re scored on what you meant." />
+        <PageHead title="What the judge heard" sub="Fix any misheard words before you’re scored." />
         <div className="mb-4 flex flex-wrap gap-2">
           <span className="cut-sm bg-white px-3 py-1.5 text-[14px] font-bold">{clock(transcript.duration)} of {minutes(ev.presentMin || 7)}:00</span>
           <span className="cut-sm bg-white px-3 py-1.5 text-[14px] font-bold">{transcript.wpm} words per minute</span>
@@ -515,33 +498,30 @@ export function PresentEvent() {
   // Setup
   return (
     <div className="animate-rise">
-      <Link to={home} className="text-[14px] font-bold text-ink-2 hover:text-navy-950">{roleplay ? 'All role play events' : 'All presentation events'}</Link>
-      <div className="mt-3">
-        <PageHead title={ev.name} sub={ev.format || 'Practice your presentation and get scored on the official rating sheet.'} />
-      </div>
+      <PageHead title={ev.name} sub={ev.format || undefined} back={{ to: home, label: roleplay ? 'Role plays' : 'Presentations' }} />
 
-      {!ev.ready && <div className="mb-6"><Notice tone="bad">{ev.note || 'This event’s rating sheet couldn’t be loaded yet. Try again in a few minutes.'}</Notice></div>}
+      {!ev.ready && <div className="mb-6"><Notice tone="bad">{ev.note || 'The rating sheet hasn’t loaded yet. Try again in a few minutes.'}</Notice></div>}
 
       {ev.ready && (
         <div className="grid gap-5 lg:grid-cols-[1.3fr_1fr]">
           <section className="cut bg-white p-6">
             <h2 className="font-semiwide text-xl font-extrabold text-navy-950">Practice run</h2>
-            <p className="mt-1 text-[15px] text-ink-2">{timing(ev)}, timed like the real event.</p>
+            <p className="mt-1 text-[15px] text-ink-2">{timing(ev)}.</p>
 
             {roleplay && (
               <>
-                <p className="mt-4 text-[15px] text-ink">You’ll get a brand-new scenario built from this event’s performance indicators. Read it and make notes during prep time, then perform it out loud. About halfway through, the judge will interrupt with a question, just like the real event.</p>
+                <p className="mt-4 text-[15px] text-ink">You get a new scenario, prep time, then the role play. Halfway through, the judge interrupts.</p>
                 <label className="mt-5 grid gap-1 text-[13px] font-bold text-ink-2">
                   Teammates <span className="font-normal">(optional, for team role plays)</span>
                   <input className={input} value={team} onChange={(e) => setTeam(e.target.value)} placeholder="For example: Priya, Sam" />
                 </label>
-                {team.trim() && <p className="mt-2 text-[13px] text-ink-2">Say your name the first time you speak, so the judge can follow who’s talking.</p>}
+                {team.trim() && <p className="mt-2 text-[13px] text-ink-2">Say your name the first time you speak.</p>}
               </>
             )}
 
             {!isInterview(ev) && !roleplay && (
               <label className="mt-5 grid gap-1 text-[13px] font-bold text-ink-2">
-                What’s your presentation about? <span className="font-normal">(optional, helps the judge)</span>
+                Topic <span className="font-normal">(optional)</span>
                 <input className={input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="For example: SnackSmart, a healthy vending business" />
               </label>
             )}
@@ -559,7 +539,7 @@ export function PresentEvent() {
 
             {!isInterview(ev) && !roleplay && !/impromptu|public speaking/i.test(ev.name) && (
               <div className="mt-5">
-                <p className="text-[13px] font-bold text-ink-2">Slides <span className="font-normal">(optional PDF, so the judge can see them)</span></p>
+                <p className="text-[13px] font-bold text-ink-2">Slides <span className="font-normal">(optional PDF)</span></p>
                 {slides ? (
                   <p className="mt-2 text-[14px]"><b>{slides.name}</b> added, {plural(slides.words, 'word')} of text. <button className={btn.link} onClick={() => setSlides(null)}>Remove</button></p>
                 ) : (
@@ -574,7 +554,7 @@ export function PresentEvent() {
             <fieldset className="mt-6">
               <legend className="text-[13px] font-bold text-ink-2">How you’ll present</legend>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {([['voice', 'Out loud', 'Records your voice and turns it into text. Most like the real thing.'], ['typed', 'Type my script', 'No microphone needed. Pace and filler words aren’t measured.']] as const).map(([m, label, desc]) => (
+                {([['voice', 'Out loud', 'Recorded and transcribed.'], ['typed', 'Type it', 'No microphone needed.']] as const).map(([m, label, desc]) => (
                   <button key={m} role="radio" aria-checked={mode === m} disabled={m === 'voice' && !recordingSupported()} onClick={() => setMode(m)}
                     className={`cut-sm px-4 py-3 text-left ${mode === m ? 'bg-navy-900 text-white' : 'bg-paper text-ink hover:bg-navy-100'} disabled:opacity-50`}>
                     <span className={`block font-bold ${mode === m ? 'text-gold' : 'text-navy-950'}`}>{label}</span>
@@ -585,9 +565,9 @@ export function PresentEvent() {
             </fieldset>
 
             <button className={`${btn.gold} mt-6`} disabled={!!busy} onClick={() => void start()}>
-              {busy === 'scenario' ? 'Writing your scenario…' : roleplay ? `Get my scenario and start ${minutes(ev.prepMin || 20)} min of prep` : ev.prepMin && usesPrompt(ev) ? 'Start prep time' : 'Start presenting'}
+              {busy === 'scenario' ? 'Writing your scenario…' : roleplay ? 'Get my scenario' : ev.prepMin && usesPrompt(ev) ? 'Start prep time' : 'Start presenting'}
             </button>
-            {mode === 'voice' && <p className="mt-3 text-[13px] text-ink-2">Chrome will ask to use your microphone. The recording is only used to make a transcript and is never saved.</p>}
+            {mode === 'voice' && <p className="mt-3 text-[13px] text-ink-2">Recordings are transcribed, then deleted.</p>}
             {(error || rec.error) && <div className="mt-4"><Notice tone="bad">{error || rec.error}</Notice></div>}
           </section>
 
@@ -657,7 +637,7 @@ export function PresentResultPage() {
         <div>
           <p className="font-semiwide text-[15px] font-extrabold text-navy-200">{res.eventName}{res.title ? `: ${res.title}` : ''}</p>
           <h1 className="mt-2 font-wide text-[clamp(28px,4vw,42px)] font-black leading-none">{verdict}</h1>
-          <p className="mt-3 text-[17px] text-navy-100">{res.score} of {res.max} points on the lines the judge could score from your {res.mode === 'typed' ? 'script' : 'recording'}.</p>
+          <p className="mt-3 text-[17px] text-navy-100">{res.score} of {res.max} points</p>
         </div>
       </section>
 
@@ -697,7 +677,7 @@ export function PresentResultPage() {
       {res.coverage && res.coverage.length > 0 && (
         <section className="mt-12">
           <h2 className="font-semiwide text-2xl font-extrabold text-navy-950">Performance indicators</h2>
-          <p className="mt-1 text-ink-2">{res.coverage.filter((c) => c.covered).length} of {res.coverage.length} covered.</p>
+          <p className="mt-1 text-ink-2">{res.coverage.filter((c) => c.covered).length} of {res.coverage.length} covered</p>
           <ul className="cut mt-4 divide-y divide-line bg-white">
             {res.coverage.map((c) => (
               <li key={c.name} className="flex gap-3 px-5 py-3.5">
@@ -729,8 +709,8 @@ export function PresentResultPage() {
         </div>
         {notJudged.length > 0 && (
           <div className="cut mt-5 bg-navy-100 p-5">
-            <h3 className="font-bold text-navy-950">Judged in person, not scored here</h3>
-            <p className="text-[14px] text-ink-2">A recording can’t show these, so they aren’t in your score.</p>
+            <h3 className="font-bold text-navy-950">Judged in person</h3>
+            <p className="text-[14px] text-ink-2">Not in your score.</p>
             <ul className="mt-3 grid gap-2 text-[15px]">
               {notJudged.map((c) => <li key={c.name}><b>{c.name}</b> ({c.max} points){c.feedback ? `: ${c.feedback}` : ''}</li>)}
             </ul>
@@ -757,7 +737,7 @@ export function PresentResultPage() {
           <h2 className="font-semiwide text-2xl font-extrabold text-navy-950">When the judge interrupted</h2>
           <ul className="mt-4 grid gap-3">
             {res.interjections.map((x, i) => (
-              <li key={i} className="cut bg-white p-5"><p className="font-bold text-navy-950">“{x.q}”</p><p className="mt-1 text-[14px] text-ink-2">At {clock(x.at)}. Your answer is in the transcript around that time.</p></li>
+              <li key={i} className="cut bg-white p-5"><p className="font-bold text-navy-950">“{x.q}”</p><p className="mt-1 text-[14px] text-ink-2">At {clock(x.at)}</p></li>
             ))}
           </ul>
         </section>

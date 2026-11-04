@@ -144,7 +144,6 @@ export function Session() {
     return (
       <div className="py-16">
         <h1 className="font-wide text-3xl font-black text-navy-950">No practice in progress</h1>
-        <p className="mt-3 text-ink-2">Pick an event to start a drill or a practice test.</p>
         <Link to="/practice" className={`${btn.navy} mt-6`}>Pick an event</Link>
       </div>
     );
@@ -181,7 +180,7 @@ export function Session() {
       </div>
 
       {s.start.generated > 0 && s.index === 0 && !checked && (
-        <p className="mt-4 text-[14px] text-ink-2">The AI wrote {plural(s.start.generated, 'new question')} for this session.</p>
+        <p className="mt-4 text-[14px] text-ink-2">{plural(s.start.generated, 'new question')} in this set.</p>
       )}
 
       <article className="cut mt-5 bg-white p-6 sm:p-8">
@@ -269,8 +268,8 @@ export function Session() {
       )}
 
       {error && <div className="mt-6"><Notice tone="bad">{error}</Notice></div>}
-      {!isFull && <p className="mt-8 text-[13px] text-ink-3">Tip: press 1–4 to answer and Enter to check.</p>}
-      {isFull && <p className="mt-8 text-[13px] text-ink-3">Tip: press 1–4 to answer and the arrow keys to move between questions.</p>}
+      {!isFull && <p className="mt-8 text-[13px] text-ink-3">Keys: 1–4 to answer, Enter to check.</p>}
+      {isFull && <p className="mt-8 text-[13px] text-ink-3">Keys: 1–4 to answer, arrows to move.</p>}
     </div>
   );
 }
