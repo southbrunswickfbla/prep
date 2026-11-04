@@ -97,6 +97,16 @@ The 12 role play events have their own **Role plays** page. Their test round sta
 - **Teams.** One device records the whole team. Speech-to-text can't tell voices apart, so teammates should say their name the first time they speak.
 - **Speech-to-text use.** Each role play transcribes about 10 minutes of audio (the first half again for the judge's interruption, then the whole thing), so it uses more of Groq's daily audio allowance than a presentation.
 
+## 7. Saving AI credits
+
+FBLA Prep is set up to stretch Groq's free allowance:
+
+- **Speech:** Chrome's built-in speech-to-text is used first, for free. Groq's Whisper is only used if Chrome's doesn't work, or if a member picks it to count filler words.
+- **Two models:** light jobs (easy questions, study guides, scenarios, interruptions) use `openai/gpt-oss-20b` with low thinking. Scoring, hard questions, and reading guidelines use `openai/gpt-oss-120b`. Groq's limits are per model, so this roughly doubles what you can do.
+- **Questions:** the timer only fills events members have practiced (set `TOPUP_ALL` to `true` to fill all 45), writes 20 at a time, and stops at about 24 per topic. Drills only write questions when a topic runs out. After that, members see repeats, oldest first.
+- **Reuse:** role play scenarios and practice prompts are saved in the **Pool** tab and reused. A member gets a new scenario only after doing every saved one.
+- **See where it goes:** the Admin page shows today's AI use by feature and the last 7 days.
+
 ## Try it locally
 
 ```bash

@@ -65,7 +65,8 @@ export type FlaggedQuestion = {
   choices: string[]; answer: number; explanation: string; flags: number; status: string; reasons: string[];
 };
 
-export type AdminOverview = { events: EventSummary[]; flagged: FlaggedQuestion[]; target: number; aiReady: boolean; model: string };
+export type UsageDay = { date: string; labels: { label: string; calls: number; tokens: number; seconds: number }[] };
+export type AdminOverview = { events: EventSummary[]; flagged: FlaggedQuestion[]; target: number; aiReady: boolean; model: string; usage?: UsageDay[] };
 
 export type StudyNotes = { content: string; updated: string };
 

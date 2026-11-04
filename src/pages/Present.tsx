@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { api, errorText } from '../lib/api';
 import { clock, plural, shortDate } from '../lib/format';
-import { blobToBase64, recordingSupported, speak, stopSpeaking, useRecorder, type Recording } from '../lib/recorder';
+import { blobToBase64, liveSupported, recordingSupported, speak, stopSpeaking, useLiveTranscript, useRecorder, type Recording } from '../lib/recorder';
 import { Bar, btn, External, Loading, Notice, PageHead } from '../components/Layout';
 import { RowSections, ScorePip } from '../components/Bits';
 import type { JudgeEvent, JudgeEventDetail, PresentResult, Scenario, Transcript } from '../types';
@@ -125,6 +125,9 @@ export function PresentEvent() {
   const [answerTyped, setAnswerTyped] = useState('');
   const [answerMode, setAnswerMode] = useState<'voice' | 'typed'>('voice');
   const rec = useRecorder();
+  const live = useLiveTranscript();
+  // Free speech-to-text built into Chrome first; Groq's Whisper (uses credits) as the backup.
+  const [stt, setStt] = useState<'free' | 'whisper'>(liveSupported() ? 'free' : 'whisper');
   const stopping = useRef(false);
   // Role play
   const [scenario, setScenario] = useState<Scenario | null>(null);
@@ -170,6 +173,7 @@ export function PresentEvent() {
     if (mode === 'voice') {
       const ok = await rec.start();
       if (!ok) return;
+      if (stt === 'free') live.start();
     }
     stopping.current = false;
     interjectAsked.current = false;
@@ -216,9 +220,15 @@ export function PresentEvent() {
     stopping.current = true;
     if (mode === 'voice') {
       const r = await rec.stop();
+      const said = stt === 'free' ? live.stop() : '';
       if (!r) { setError('Nothing was recorded. Try again.'); setStep('setup'); return; }
       setTalk(r);
-      void transcribeTalk(r);
+      const words = said.split(/\s+/).filter(Boolean).length;
+      if (stt === 'free' && words >= 25) {
+        // Chrome's transcript is good enough: no credits used. Filler words and pauses aren't measured this way.
+        setTranscript({ text: said, duration: r.seconds, words, wpm: r.seconds > 5 ? Math.round(words / (r.seconds / 60)) : 0, fillers: -1, pauses: -1 });
+        setStep('review');
+      } else void transcribeTalk(r);
     } else {
       const words = typed.trim().split(/\s+/).filter(Boolean).length;
       if (words < 25) { stopping.current = false; setError('Type more of your script first (at least a few sentences).'); return; }
@@ -245,7 +255,9 @@ export function PresentEvent() {
     void (async () => {
       try {
         let soFar = typed;
-        if (mode === 'voice') {
+        if (mode === 'voice' && stt === 'free' && live.text().split(/\s+/).length > 20) {
+          soFar = live.text(); // free: what Chrome has heard so far
+        } else if (mode === 'voice') {
           const snap = await rec.snapshot();
           if (!snap) return; // nothing recorded yet: try again on the next tick
           soFar = (await api.present.transcribe(await blobToBase64(snap.blob), snap.mime)).text;
@@ -282,7 +294,7 @@ export function PresentEvent() {
   async function startAnswer() {
     stopSpeaking();
     const ok = await rec.start();
-    if (ok) { stopping.current = false; setDeadline(Date.now() + secondsEach * 1000); }
+    if (ok) { if (stt === 'free') live.start(); stopping.current = false; setDeadline(Date.now() + secondsEach * 1000); }
   }
 
   const saveAnswer = useCallback(async (text: string) => {
@@ -297,15 +309,17 @@ export function PresentEvent() {
     if (stopping.current) return;
     stopping.current = true;
     const r = await rec.stop();
+    const said = stt === 'free' ? live.stop() : '';
     setDeadline(0);
     if (!r) return;
+    if (said.split(/\s+/).filter(Boolean).length >= 3) { await saveAnswer(said); return; }
     setBusy('answer'); setError('');
     try {
       const t = await api.present.transcribe(await blobToBase64(r.blob), r.mime);
       await saveAnswer(t.text);
     } catch (e) { setError(errorText(e) + ' You can type your answer instead.'); setAnswerMode('typed'); }
     finally { setBusy(''); }
-  }, [rec, saveAnswer]);
+  }, [rec, live, stt, saveAnswer]);
 
   useEffect(() => { if (step === 'qa' && rec.recording && deadline && left === 0) void stopAnswer(); }, [left, step, rec.recording, deadline, stopAnswer]);
 
@@ -315,7 +329,7 @@ export function PresentEvent() {
     try {
       const res = await api.present.judge({
         eventId, title, transcript: transcript.text, slides: slides?.text || '', qa: answers, prompt,
-        seconds: transcript.duration, wpm: transcript.wpm, fillers: mode === 'voice' ? transcript.fillers : 0, pauses: transcript.pauses, mode,
+        seconds: transcript.duration, wpm: transcript.wpm, fillers: mode === 'voice' ? transcript.fillers : -1, pauses: mode === 'voice' ? transcript.pauses : -1, mode,
         scenario, interjections, team: team.trim(),
       });
       try { sessionStorage.setItem('fblaprep.present.' + res.id, JSON.stringify(res)); } catch { /* ignore */ }
@@ -433,7 +447,7 @@ export function PresentEvent() {
         <div className="mb-4 flex flex-wrap gap-2">
           <span className="cut-sm bg-white px-3 py-1.5 text-[14px] font-bold">{clock(transcript.duration)} of {minutes(ev.presentMin || 7)}:00</span>
           <span className="cut-sm bg-white px-3 py-1.5 text-[14px] font-bold">{transcript.wpm} words per minute</span>
-          {mode === 'voice' && <span className="cut-sm bg-white px-3 py-1.5 text-[14px] font-bold">{plural(transcript.fillers, 'filler sound')}</span>}
+          {mode === 'voice' && transcript.fillers >= 0 && <span className="cut-sm bg-white px-3 py-1.5 text-[14px] font-bold">{plural(transcript.fillers, 'filler sound')}</span>}
         </div>
         <textarea className={`${input} min-h-64 bg-white text-[16px]`} value={transcript.text} onChange={(e) => setTranscript({ ...transcript, text: e.target.value })} aria-label="Transcript" />
         <div className="mt-5 flex flex-wrap gap-3">
@@ -567,6 +581,15 @@ export function PresentEvent() {
             <button className={`${btn.gold} mt-6`} disabled={!!busy} onClick={() => void start()}>
               {busy === 'scenario' ? 'Writing your scenario…' : roleplay ? 'Get my scenario' : ev.prepMin && usesPrompt(ev) ? 'Start prep time' : 'Start presenting'}
             </button>
+            {mode === 'voice' && liveSupported() && (
+              <label className="mt-4 flex flex-wrap items-center gap-2 text-[13px] font-bold text-ink-2">
+                Speech-to-text
+                <select value={stt} onChange={(e) => setStt(e.target.value as 'free' | 'whisper')} className="cut-sm bg-paper px-2 py-1.5 text-[14px] font-semibold text-ink">
+                  <option value="free">Chrome (free)</option>
+                  <option value="whisper">Whisper (counts filler words, uses AI credits)</option>
+                </select>
+              </label>
+            )}
             {mode === 'voice' && <p className="mt-3 text-[13px] text-ink-2">Recordings are transcribed, then deleted.</p>}
             {(error || rec.error) && <div className="mt-4"><Notice tone="bad">{error || rec.error}</Notice></div>}
           </section>
@@ -645,8 +668,8 @@ export function PresentResultPage() {
         {[
           ['Time', `${clock(res.seconds)} of ${clock(res.limitSeconds)}`, over > 0 ? `${clock(over)} over the limit` : res.seconds < res.limitSeconds * 0.6 ? 'Quite a bit under the limit' : 'Within the limit'],
           ['Pace', res.mode === 'typed' ? 'Not measured' : `${res.wpm} words/min`, res.mode === 'typed' ? 'Typed script' : res.wpm > 170 ? 'Fast. Aim for 130 to 160.' : res.wpm < 110 ? 'Slow. Aim for 130 to 160.' : 'Good pace'],
-          ['Filler sounds', res.mode === 'typed' ? 'Not measured' : String(res.fillers), res.mode === 'typed' ? 'Typed script' : 'Um, uh, and similar. Rough count.'],
-          ['Long pauses', res.mode === 'typed' ? 'Not measured' : String(res.pauses), res.mode === 'typed' ? 'Typed script' : 'Gaps of 3 seconds or more'],
+          ['Filler sounds', res.mode === 'typed' || res.fillers < 0 ? 'Not measured' : String(res.fillers), res.mode === 'typed' ? 'Typed script' : res.fillers < 0 ? 'Use Whisper to count them' : 'Um, uh, and similar. Rough count.'],
+          ['Long pauses', res.mode === 'typed' || res.pauses < 0 ? 'Not measured' : String(res.pauses), res.mode === 'typed' ? 'Typed script' : res.pauses < 0 ? 'Use Whisper to count them' : 'Gaps of 3 seconds or more'],
         ].map(([label, value, note]) => (
           <div key={label} className="cut bg-white p-4">
             <div className="text-[13px] font-bold text-ink-2">{label}</div>

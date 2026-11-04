@@ -3,7 +3,7 @@ import { api, errorText } from '../lib/api';
 import { useData } from '../lib/data';
 import { LETTERS, plural } from '../lib/format';
 import { btn, External, Loading, Notice, PageHead } from '../components/Layout';
-import type { AdminOverview, EventSummary, ReadinessRow, Topic } from '../types';
+import type { AdminOverview, EventSummary, ReadinessRow, Topic, UsageDay } from '../types';
 
 const input = 'cut-sm w-full bg-paper px-3 py-2.5 text-[15px] outline-none inset-ring-1 inset-ring-line focus:inset-ring-2 focus:inset-ring-gold';
 
@@ -133,6 +133,41 @@ function EventEditor({ ev, target, onChanged }: { ev: EventSummary; target: numb
   );
 }
 
+function UsagePanel({ days }: { days: UsageDay[] }) {
+  const today = days[0];
+  const total = (d: UsageDay) => d.labels.reduce((n, l) => n + l.tokens, 0);
+  const calls = (d: UsageDay) => d.labels.reduce((n, l) => n + l.calls, 0);
+  const speech = (d: UsageDay) => d.labels.reduce((n, l) => n + l.seconds, 0);
+  const max = Math.max(1, ...days.map(total));
+  const fmt = (n: number) => (n >= 1000000 ? (n / 1000000).toFixed(1) + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n));
+  return (
+    <section className="cut mb-6 bg-white p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 className="font-semiwide text-xl font-extrabold text-navy-950">AI use today</h2>
+        <span className="text-[14px] font-bold text-ink-2">{fmt(total(today))} tokens, {calls(today)} calls{speech(today) ? `, ${Math.round(speech(today) / 60)} min of speech` : ''}</span>
+      </div>
+      {today.labels.length === 0 ? <p className="mt-3 text-ink-2">Nothing yet today.</p> : (
+        <ul className="mt-3 divide-y divide-line">
+          {today.labels.map((l) => (
+            <li key={l.label} className="flex justify-between gap-4 py-2 text-[14px]">
+              <span className="font-semibold text-navy-950">{l.label}</span>
+              <span className="text-ink-2">{l.seconds ? `${Math.round(l.seconds / 60)} min` : `${fmt(l.tokens)} tokens`}, {l.calls} {l.calls === 1 ? 'call' : 'calls'}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-5 flex items-end gap-2" aria-label="Tokens per day, last 7 days">
+        {[...days].reverse().map((d) => (
+          <div key={d.date} className="flex flex-1 flex-col items-center gap-1">
+            <div className="flex h-16 w-full items-end bg-navy-100"><div className="w-full bg-navy-900" style={{ height: `${(total(d) / max) * 100}%` }} title={`${fmt(total(d))} tokens`} /></div>
+            <span className="text-[11px] font-bold text-ink-3">{d.date.slice(5).replace('-', '/')}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function Admin() {
   const { data, refresh } = useData();
   const [ov, setOv] = useState<AdminOverview | null>(null);
@@ -231,6 +266,8 @@ export function Admin() {
       <PageHead title="Admin" />
       {!ov.aiReady && <div className="mb-6"><Notice tone="bad">The AI isn’t connected. Add GROQ_API_KEY (or XAI_API_KEY or GEMINI_API_KEY) in the Apps Script project’s Script properties.</Notice></div>}
       {ov.aiReady && <p className="mb-6 text-[14px] text-ink-2">AI model: <b>{ov.model}</b>. Bank target: {ov.target} questions per topic.</p>}
+
+      {ov.usage && <UsagePanel days={ov.usage} />}
 
       <section className="cut bg-navy-900 p-6 text-white">
         <h2 className="font-semiwide text-xl font-extrabold text-gold">FBLA 2026–27 tests</h2>

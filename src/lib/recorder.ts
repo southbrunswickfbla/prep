@@ -136,3 +136,69 @@ export function speak(text: string) {
   } catch { /* reading aloud is optional */ }
 }
 export function stopSpeaking() { try { window.speechSynthesis.cancel(); } catch { /* ignore */ } }
+
+/* ---------- Free speech-to-text built into Chrome (and Safari) ---------- */
+
+type SR = {
+  continuous: boolean; interimResults: boolean; lang: string;
+  start: () => void; stop: () => void; abort: () => void;
+  onresult: ((e: { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((e: { error: string }) => void) | null;
+};
+function srClass(): (new () => SR) | null {
+  const w = window as unknown as { SpeechRecognition?: new () => SR; webkitSpeechRecognition?: new () => SR };
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+export function liveSupported(): boolean { return typeof window !== 'undefined' && !!srClass(); }
+
+/**
+ * Live transcript from the browser's own speech recognition. It costs no AI credits.
+ * It restarts itself when Chrome pauses after silence, and reports if it gets blocked.
+ */
+export function useLiveTranscript() {
+  const sr = useRef<SR | null>(null);
+  const finals = useRef<string[]>([]);
+  const interim = useRef('');
+  const active = useRef(false);
+  const failed = useRef(false);
+
+  const start = useCallback(() => {
+    const C = srClass();
+    finals.current = []; interim.current = ''; failed.current = false;
+    if (!C) { failed.current = true; return; }
+    try {
+      const r = new C();
+      r.continuous = true; r.interimResults = true; r.lang = 'en-US';
+      r.onresult = (e) => {
+        let live = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const res = e.results[i];
+          if (res.isFinal) finals.current.push(res[0].transcript.trim()); else live += res[0].transcript;
+        }
+        interim.current = live.trim();
+      };
+      r.onerror = (e) => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'network') { failed.current = true; active.current = false; } };
+      r.onend = () => {
+        if (interim.current) { finals.current.push(interim.current); interim.current = ''; }
+        if (active.current) { try { r.start(); } catch { /* already running */ } }
+      };
+      active.current = true;
+      sr.current = r;
+      r.start();
+    } catch { failed.current = true; }
+  }, []);
+
+  const text = useCallback(() => [...finals.current, interim.current].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim(), []);
+
+  const stop = useCallback((): string => {
+    active.current = false;
+    try { sr.current?.stop(); } catch { /* ignore */ }
+    sr.current = null;
+    return text();
+  }, [text]);
+
+  useEffect(() => () => { active.current = false; try { sr.current?.abort(); } catch { /* ignore */ } }, []);
+
+  return { start, stop, text, failed: () => failed.current };
+}

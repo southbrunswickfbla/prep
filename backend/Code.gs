@@ -1,5 +1,5 @@
 /**
- * SBHS FBLA Prep — backend (Google Apps Script), v3.1
+ * SBHS FBLA Prep — backend (Google Apps Script), v3.2
  *
  * Paste this into the Apps Script project attached to the "FBLA Prep Data" Google Sheet,
  * save, then run setup() once. Full steps are in SETUP.md.
@@ -25,16 +25,17 @@
  *  MEMBER_SHEET_ID       optional. If set, only students on this sheet can sign in.
  *  MEMBER_SHEET_TAB      default "Attendance".
  *  GEMINI_MODEL          default "gemini-flash-latest". Any free-tier text model from AI Studio works.
- *  BANK_TARGET           default 30 questions per topic.
+ *  BANK_TARGET           default 24 questions per topic (8 at each difficulty), more for events with few topics.
+ *  TOPUP_ALL             default false: the timer only fills events members have practiced. "true" fills all 45.
+ *  GROQ_FAST_MODEL       default openai/gpt-oss-20b. Used for light jobs (easy questions, study guides, scenarios).
  *  FULL_TEST_SIZE        default 100.   FULL_TEST_MINUTES   default 50.
- *  BANK_MAX_PER_TOPIC    default 120. Drills stop writing new questions for a topic once it has this many.
  *  FLAG_HIDE_AT          default 2 reports before a question is hidden.
  *  TOPUP_BATCHES_PER_RUN default 2 (each batch is one AI call of up to 10 questions).
  *  GEMINI_FALLBACK_MODEL default "gemini-flash-lite-latest". Used when the main model stays overloaded. "none" turns it off.
  *  AI_MIN_GAP_MS        default 6000. Minimum time between AI calls, to stay under the free per-minute limit.
  */
 
-const VERSION = 'v3.1';
+const VERSION = 'v3.2';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 
 const TABS = {
@@ -45,6 +46,7 @@ const TABS = {
   Users:     ['email', 'name', 'firstSeen', 'lastSeen', 'sessions'],
   Flags:     ['time', 'email', 'questionId', 'reason'],
   Notes:     ['eventId', 'topic', 'content', 'updated', 'source'],
+  Pool:      ['id', 'eventId', 'type', 'json', 'created', 'uses'],
   Judging:   ['id', 'name', 'category', 'guide', 'rubric', 'presentMin', 'qaMin', 'prepMin', 'format', 'note', 'updated', 'active', 'kind', 'indicators'],
   Presentations: ['id', 'email', 'eventId', 'eventName', 'title', 'submitted', 'seconds', 'words', 'wpm', 'fillers', 'pauses', 'score', 'max', 'pct', 'detail', 'transcript'],
 };
@@ -109,7 +111,7 @@ function route(action, b, user) {
     case 'judgeQuestions': return judgeQuestions(String(b.eventId || ''), String(b.title || ''), String(b.transcript || ''), String(b.slides || ''), String(b.prompt || ''));
     case 'judgePresentation': return judgePresentation(user, b);
     case 'presentResult': return presentResult(user, String(b.id || ''));
-    case 'roleplayScenario': return roleplayScenario(String(b.eventId || ''));
+    case 'roleplayScenario': return roleplayScenario(String(b.eventId || ''), user);
     case 'roleplayInterject': return roleplayInterject(String(b.eventId || ''), b.scenario || {}, String(b.transcript || ''), Number(b.atSeconds) || 0);
   }
   if (!user.admin) throw fail('forbidden', 'Only officers can do that.');
@@ -403,7 +405,7 @@ function readStats(email, eventId) {
   readAll('Stats').forEach(function (r) {
     if (r.email !== email || r.eventId !== eventId) return;
     const seen = {};
-    jsonArr(r.seen).forEach(function (id) { seen[id] = true; });
+    jsonArr(r.seen).forEach(function (id, i) { seen[id] = i + 1; }); // 1 = seen longest ago
     out[r.topic] = { attempts: Number(r.attempts) || 0, correct: Number(r.correct) || 0, seen: seen, missed: jsonArr(r.missed) };
   });
   return out;
@@ -464,29 +466,17 @@ function startSession(user, eventId, mode, topic, level) {
     const plan = planCounts(topics, size, mode, stats);
     const allowed = function (q) { return mix[diffOf(q)] > 0; };
 
-    // Drills: write new questions at this level when a topic is short on ones the member hasn't seen.
-    // Usually one AI call, two when topics are nearly empty, so nobody waits long.
+    // Drills only write new questions when a topic doesn't have enough at this level at all.
+    // Once a member has seen everything, they get repeats, oldest first, which is good review and costs nothing.
     if (mode !== 'full') {
-      const cap = num('BANK_MAX_PER_TOPIC', 120);
       const short = Object.keys(plan).map(function (name) {
-        const seen = stats[name] ? stats[name].seen : {};
         const inTopic = bank.filter(function (q) { return q.topic === name; });
-        const atLevel = inTopic.filter(allowed).length;
-        // How many fresh questions of each difficulty this drill wants, versus how many exist.
-        let worst = null, missing = 0;
-        Object.keys(mix).forEach(function (d) {
-          const need = Math.ceil(plan[name] * mix[d]);
-          const fresh = inTopic.filter(function (q) { return diffOf(q) === d && !seen[q.id]; }).length;
-          const gap = need - fresh;
-          if (gap > 0) { missing += gap; if (!worst || gap > worst.gap) worst = { d: d, gap: gap }; }
-        });
-        return { name: name, missing: missing, difficulty: worst ? worst.d : null, atLevel: atLevel, total: inTopic.length };
-      }).filter(function (x) { return x.missing > 0 && (x.atLevel < plan[x.name] || x.total < cap); })
-        .sort(function (a, b) { return a.atLevel - b.atLevel || b.missing - a.missing; });
-      const urgent = short.filter(function (x) { return x.atLevel < plan[x.name]; });
-      (urgent.length ? urgent.slice(0, 2) : short.slice(0, 1)).forEach(function (sh) {
+        return { name: name, atLevel: inTopic.filter(allowed).length };
+      }).filter(function (x) { return x.atLevel < plan[x.name]; })
+        .sort(function (a, b) { return a.atLevel - b.atLevel; });
+      short.slice(0, 2).forEach(function (sh) {
         try {
-          const rows = generateQuestions(ev, sh.name, Math.max(sh.missing, 8), sh.difficulty || neediestDifficulty(bank, sh.name, mix));
+          const rows = generateQuestions(ev, sh.name, num('DRILL_BATCH', 12), neediestDifficulty(bank, sh.name, mix));
           generated += rows.length;
           bank = bank.concat(rows.map(qFromRow));
         } catch (err) {
@@ -498,7 +488,8 @@ function startSession(user, eventId, mode, topic, level) {
     const used = {};
     Object.keys(plan).forEach(function (name) {
       const seen = stats[name] ? stats[name].seen : {};
-      const pool = shuffled(bank.filter(function (q) { return q.topic === name; }));
+      const pool = shuffled(bank.filter(function (q) { return q.topic === name; }))
+        .sort(function (a, b) { return (seen[a.id] || 0) - (seen[b.id] || 0); }); // unseen first, then oldest seen
       for (let k = 0; k < plan[name]; k++) {
         const want = pickDifficulty(mix);
         const order = [
@@ -691,19 +682,62 @@ function aiModelLabel() {
  * input is a string, or (Gemini only) a list of parts that can include a PDF.
  * schema is a Gemini-style schema; for other providers it becomes a JSON Schema.
  */
-function aiCall(input, schema, temperature) {
+function aiCall(input, schema, temperature, opts) {
+  opts = opts || {};
   const p = aiProvider();
   if (!p) throw fail('ai', 'The AI isn’t connected yet. Add GROQ_API_KEY (or XAI_API_KEY or GEMINI_API_KEY) in Script properties.');
-  if (p === 'gemini') return gemini(input, schema, temperature);
+  if (p === 'gemini') { const out = gemini(input, schema, temperature); recordUsage(opts.label || 'other', 0); return out; }
   const text = typeof input === 'string' ? input : (input || []).map(function (x) { return x.text || ''; }).join('\n');
-  return openAiCompatCall(p, text, schema, temperature);
+  return openAiCompatCall(p, text, schema, temperature, opts);
+}
+
+/* ---------- Usage tracking, so officers can see where credits go ---------- */
+
+function usageKey(d) { return 'usage:' + Utilities.formatDate(d || new Date(), 'America/New_York', 'yyyy-MM-dd'); }
+/** Adds one call (and its tokens or audio seconds) to today's tally. Approximate: good enough to see trends. */
+function recordUsage(label, tokens, seconds) {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const key = usageKey();
+    let u = {};
+    try { u = JSON.parse(props.getProperty(key) || '{}'); } catch (_) { u = {}; }
+    const r = u[label] || (u[label] = { calls: 0, tokens: 0, seconds: 0 });
+    r.calls++;
+    r.tokens += Math.max(0, Math.round(tokens || 0));
+    r.seconds += Math.max(0, Math.round(seconds || 0));
+    props.setProperty(key, JSON.stringify(u));
+  } catch (_) { /* tracking never blocks the real work */ }
+}
+function usageReport() {
+  const props = PropertiesService.getScriptProperties();
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(Date.now() - i * 86400000);
+    let u = {};
+    try { u = JSON.parse(props.getProperty(usageKey(d)) || '{}'); } catch (_) { u = {}; }
+    const labels = Object.keys(u).map(function (k) { return { label: k, calls: u[k].calls || 0, tokens: u[k].tokens || 0, seconds: u[k].seconds || 0 }; })
+      .sort(function (a, b) { return b.tokens - a.tokens || b.calls - a.calls; });
+    days.push({ date: Utilities.formatDate(d, 'America/New_York', 'yyyy-MM-dd'), labels: labels });
+  }
+  // Old days fall off after two weeks.
+  try {
+    const cutoff = usageKey(new Date(Date.now() - 14 * 86400000));
+    props.getKeys().forEach(function (k) { if (k.indexOf('usage:') === 0 && k < cutoff) props.deleteProperty(k); });
+  } catch (_) { /* fine */ }
+  return days;
 }
 
 /** Groq and xAI both use the OpenAI chat format. */
-function openAiCompatCall(provider, text, schema, temperature) {
+function openAiCompatCall(provider, text, schema, temperature, opts) {
+  opts = opts || {};
+  // Heavy jobs (scoring, hard questions, reading guidelines) go to the big model first; light jobs to the fast one.
+  // Groq's limits are per model, so splitting the work stretches the free allowance.
+  const big = prop('GROQ_MODEL', 'openai/gpt-oss-120b');
+  const fast = prop('GROQ_FAST_MODEL', prop('GROQ_FALLBACK_MODEL', 'openai/gpt-oss-20b'));
   const cfg = provider === 'groq'
-    ? { url: 'https://api.groq.com/openai/v1/chat/completions', key: prop('GROQ_API_KEY', ''), models: [prop('GROQ_MODEL', 'openai/gpt-oss-120b'), prop('GROQ_FALLBACK_MODEL', 'openai/gpt-oss-20b')], name: 'Groq' }
+    ? { url: 'https://api.groq.com/openai/v1/chat/completions', key: prop('GROQ_API_KEY', ''), models: opts.heavy ? [big, fast] : [fast, big], name: 'Groq' }
     : { url: 'https://api.x.ai/v1/chat/completions', key: prop('XAI_API_KEY', ''), models: [prop('XAI_MODEL', '')], name: 'xAI' };
+  cfg.opts = opts;
   const models = cfg.models.filter(function (m, i, a) { return m && m !== 'none' && a.indexOf(m) === i; });
   if (!models.length) throw fail('ai', 'Set XAI_MODEL in Script properties to a model name from the xAI console.');
   const wrapped = schema && String(schema.type).toUpperCase() === 'ARRAY';
@@ -740,7 +774,9 @@ function openAiCompatOnce(cfg, model, prompt, jsonSchema, temperature) {
       temperature: temperature === undefined ? 0.7 : temperature,
       response_format: format === 'schema' ? { type: 'json_schema', json_schema: { name: 'reply', strict: true, schema: jsonSchema } } : { type: 'json_object' },
     };
-    if (/gpt-oss/.test(model)) body.reasoning_effort = 'medium';
+    // Thinking tokens count against the limit, so keep thinking low except for scoring and reading guidelines.
+    if (/gpt-oss/.test(model)) body.reasoning_effort = cfg.opts && cfg.opts.heavy ? 'medium' : 'low';
+    if (cfg.opts && cfg.opts.maxTokens) body.max_completion_tokens = cfg.opts.maxTokens;
     const res = UrlFetchApp.fetch(cfg.url, {
       method: 'post', contentType: 'application/json', muteHttpExceptions: true,
       headers: { Authorization: 'Bearer ' + cfg.key }, payload: JSON.stringify(body),
@@ -751,6 +787,7 @@ function openAiCompatOnce(cfg, model, prompt, jsonSchema, temperature) {
       const j = JSON.parse(textOut);
       const msg = j.choices && j.choices[0] && j.choices[0].message;
       const content = msg && msg.content;
+      recordUsage((cfg.opts && cfg.opts.label) || 'other', j.usage && j.usage.total_tokens);
       if (!content) throw fail('ai', cfg.name + ' didn’t send anything back. Try again.');
       return parseJsonLoose(String(content).replace(/<think>[\s\S]*?<\/think>/g, '').trim());
     }
@@ -906,8 +943,8 @@ function parseJsonLoose(s) {
 function generateQuestions(ev, topicName, count, difficulty) {
   const topic = ev.topics.filter(function (t) { return t.name === topicName; })[0] || { name: topicName, weight: 0, objectives: '' };
   const existing = readQuestions(ev.id).filter(function (q) { return q.topic === topicName; });
-  const avoid = existing.slice(-40).map(function (q) { return '- ' + q.stem.slice(0, 160); }).join('\n');
-  const n = Math.max(1, Math.min(12, Math.round(count)));
+  const avoid = existing.slice(-25).map(function (q) { return '- ' + q.stem.slice(0, 90); }).join('\n');
+  const n = Math.max(1, Math.min(20, Math.round(count)));
 
   const prompt = [
     'You write practice questions for the FBLA (Future Business Leaders of America) high school competitive event "' + ev.name + '" for the 2026–27 school year.',
@@ -939,7 +976,7 @@ function generateQuestions(ev, topicName, count, difficulty) {
     },
   };
 
-  const out = aiCall(prompt, schema, 0.8);
+  const out = aiCall(prompt, schema, 0.8, { heavy: difficulty === 'hard', label: 'Writing questions', maxTokens: 12000 });
   const items = Array.isArray(out) ? out : (out && Array.isArray(out.questions) ? out.questions : []);
   const seen = {};
   existing.forEach(function (q) { seen[norm(q.stem)] = true; });
@@ -995,7 +1032,7 @@ function studyNotes(user, eventId, topicName, regenerate) {
     'Use only "## " headings, "- " bullets, and **bold**. Keep it under 500 words. Stick to well-established facts and skip anything that changes from year to year.',
     'Return JSON: {"content": "<the study guide>"}.',
   ].filter(String).join('\n');
-  const out = aiCall(prompt, { type: 'OBJECT', properties: { content: { type: 'STRING' } }, required: ['content'] }, 0.4);
+  const out = aiCall(prompt, { type: 'OBJECT', properties: { content: { type: 'STRING' } }, required: ['content'] }, 0.4, { label: 'Study guides', maxTokens: 3000 });
   const content = String((out && out.content) || '').trim().slice(0, 12000);
   if (!content) throw fail('ai', 'The AI didn’t write the study guide. Try again.');
   const updated = nowIso();
@@ -1049,7 +1086,7 @@ function adminOverview() {
     };
   });
   return {
-    events: eventSummaries(events), flagged: flagged, target: num('BANK_TARGET', 30),
+    events: eventSummaries(events), flagged: flagged, target: num('BANK_TARGET', 24), usage: usageReport(),
     aiReady: !!aiProvider(), model: aiModelLabel(),
   };
 }
@@ -1139,7 +1176,7 @@ function suggestTopics(name, guideText) {
     },
     required: ['topics'],
   };
-  const out = aiCall(prompt, schema, 0.2);
+  const out = aiCall(prompt, schema, 0.2, { label: 'Reading guidelines', maxTokens: 3000 });
   const topics = cleanTopics(Array.isArray(out) ? out : out && out.topics);
   if (!topics.length) throw fail('ai', 'The AI didn’t find any topics. Paste more of the guidelines and try again.');
   // Make the weights add up to exactly 100.
@@ -1307,7 +1344,7 @@ function loadGuideTopics(ev) {
       required: ['topics', 'questions'],
     };
     let out;
-    if (text) out = aiCall(prompt + '\n\nGuidelines:\n"""\n' + text.slice(0, 40000) + '\n"""', schema, 0);
+    if (text) out = aiCall(prompt + '\n\nGuidelines:\n"""\n' + text.slice(0, 40000) + '\n"""', schema, 0, { heavy: true, label: 'Reading guidelines', maxTokens: 4000 });
     else if (prop('GEMINI_API_KEY', '')) out = gemini([{ inline_data: { mime_type: 'application/pdf', data: Utilities.base64Encode(blob.getBytes()) } }, { text: prompt }], schema, 0);
     else throw fail('setup', 'Turn on the Drive API service in Apps Script (Services + → Drive API → Add) so FBLA Prep can read the guidelines.');
     raw = (out && Array.isArray(out.topics) ? out.topics : []).filter(function (t) { return t && String(t.name || '').trim(); })
@@ -1556,7 +1593,7 @@ function loadRubric(j) {
     },
     required: ['presentMinutes', 'qaMinutes', 'prepMinutes', 'format', 'indicators', 'criteria'],
   };
-  const out = aiCall(prompt, schema, 0);
+  const out = aiCall(prompt, schema, 0, { heavy: true, label: 'Reading guidelines', maxTokens: 5000 });
   const seen = {};
   const criteria = (out && Array.isArray(out.criteria) ? out.criteria : []).map(function (c) {
     return { name: String(c.name || '').trim().slice(0, 140), points: Math.max(0, Math.min(100, Math.round(Number(c.points) || 0))), description: String(c.description || '').trim().slice(0, 400) };
@@ -1618,11 +1655,19 @@ function presentEvent(user, eventId) {
 function practicePrompt(eventId) {
   const j = readJudging().filter(function (x) { return x.id === eventId; })[0];
   if (!j) throw fail('not_found', 'That event isn’t available.');
+  // Keep a pool of prompts per event; once it has 20, hand out saved ones instead of writing new ones.
+  const pool = readAll('Pool').filter(function (r) { return r.eventId === eventId && r.type === 'prompt'; });
+  if (pool.length >= num('PROMPT_POOL', 20)) return { prompt: String((safeJson(shuffled(pool)[0].json) || {}).prompt || '') };
+  const made = writePrompt(j);
+  if (made.prompt) { try { withLock(function () { appendRows('Pool', [{ id: 'pr' + Utilities.getUuid().replace(/-/g, '').slice(0, 10), eventId: eventId, type: 'prompt', json: JSON.stringify(made), created: nowIso(), uses: 1 }]); }); } catch (_) { /* fine */ } }
+  return made;
+}
+function writePrompt(j) {
   const kind = /interview/i.test(j.name) ? 'a short, realistic entry-level job posting a high school student could apply for (title, company, 3 to 4 duties, and 3 qualifications)'
     : /impromptu/i.test(j.name) ? 'one impromptu speaking topic on business, leadership, or current workplace issues, phrased the way FBLA phrases impromptu topics'
     : 'one realistic scenario or topic for this event that a competitor could present on';
   const out = aiCall('Write ' + kind + ' for practicing the FBLA event "' + j.name + '". ' + (j.format ? 'Event format: ' + j.format + ' ' : '') + 'Keep it under 120 words and keep it appropriate for high school students. Return JSON: {"prompt": "..."}',
-    { type: 'OBJECT', properties: { prompt: { type: 'STRING' } }, required: ['prompt'] }, 0.9);
+    { type: 'OBJECT', properties: { prompt: { type: 'STRING' } }, required: ['prompt'] }, 0.9, { label: 'Practice prompts', maxTokens: 800 });
   return { prompt: String((out && out.prompt) || '').slice(0, 1200) };
 }
 
@@ -1676,6 +1721,7 @@ function transcribe(audio, mime) {
   }
   if (res.getResponseCode() !== 200) throw fail('ai_busy', 'Speech-to-text is busy. Try again in a minute.');
   const j = JSON.parse(res.getContentText());
+  recordUsage('Speech to text (seconds)', 0, Number(j.duration) || 0);
   const text = String(j.text || '').trim();
   const segs = Array.isArray(j.segments) ? j.segments : [];
   const duration = Number(j.duration) || (segs.length ? Number(segs[segs.length - 1].end) || 0 : 0);
@@ -1705,7 +1751,7 @@ function judgeQuestions(eventId, title, transcript, slides, promptText) {
     'Transcript:\n"""\n' + (transcript || '(no transcript)').slice(0, 10000) + '\n"""',
     'Return JSON: {"questions": ["...", "..."]}',
   ].filter(String).join('\n');
-  const out = aiCall(prompt, { type: 'OBJECT', properties: { questions: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['questions'] }, 0.6);
+  const out = aiCall(prompt, { type: 'OBJECT', properties: { questions: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['questions'] }, 0.6, { label: 'Judge questions', maxTokens: 1200 });
   const qs = (out && Array.isArray(out.questions) ? out.questions : []).map(function (q) { return String(q).trim(); }).filter(String).slice(0, n);
   if (!qs.length) throw fail('ai', 'The judge didn’t come up with questions. Try again.');
   return { questions: qs, secondsEach: interview ? 90 : Math.max(45, Math.round(((j.qaMin || 3) * 60) / qs.length)) };
@@ -1757,7 +1803,7 @@ function judgePresentation(user, b) {
     },
     required: ['criteria', 'strengths', 'improvements', 'summary', 'indicators'],
   };
-  const out = aiCall(prompt, schema, 0.2);
+  const out = aiCall(prompt, schema, 0.2, { heavy: true, label: 'Scoring presentations', maxTokens: 5000 });
   const coverage = roleplay && sc && Array.isArray(sc.indicators) ? sc.indicators.map(function (name, i) {
     const g = (out.indicators || []).filter(function (x) { return norm(x.name) === norm(name); })[0] || (out.indicators || [])[i] || {};
     return { name: String(name), covered: !!g.covered, note: String(g.note || '').slice(0, 300) };
@@ -1776,9 +1822,9 @@ function judgePresentation(user, b) {
   const score = judgedRows.reduce(function (n, x) { return n + x.points; }, 0);
   const max = judgedRows.reduce(function (n, x) { return n + x.max; }, 0);
   const result = {
-    id: 'p' + Utilities.getUuid().replace(/-/g, '').slice(0, 14), eventId: j.id, eventName: j.name, title: String(b.title || '').slice(0, 200),
+    id: 'p' + Utilities.getUuid().replace(/-/g, '').slice(0, 14), eventId: j.id, eventName: j.name, title: String(b.title || (sc && sc.title) || '').slice(0, 200),
     submitted: nowIso(), seconds: seconds, limitSeconds: limit, words: stats.words, wpm: Number(b.wpm) || stats.wpm,
-    fillers: typeof b.fillers === 'number' ? b.fillers : stats.fillers, pauses: Number(b.pauses) || 0,
+    fillers: typeof b.fillers === 'number' ? b.fillers : stats.fillers, pauses: typeof b.pauses === 'number' ? b.pauses : 0,
     score: score, max: max, pct: max ? Math.round((score / max) * 100) : 0, criteria: scored,
     strengths: (out.strengths || []).map(String).slice(0, 4), improvements: (out.improvements || []).map(String).slice(0, 4),
     summary: String(out.summary || '').slice(0, 800), qa: qa, mode: b.mode === 'typed' ? 'typed' : 'voice', prompt: String(b.prompt || '').slice(0, 1500),
@@ -1798,9 +1844,26 @@ function judgePresentation(user, b) {
 }
 
 /** Writes a fresh FBLA-style role play scenario from the event's performance indicators. */
-function roleplayScenario(eventId) {
+function roleplayScenario(eventId, user) {
   const j = readJudging().filter(function (x) { return x.id === eventId; })[0];
   if (!j) throw fail('not_found', 'That event isn’t available.');
+  // Reuse a saved scenario this member hasn't done yet. Only write a new one when they've done them all.
+  const pool = readAll('Pool').filter(function (r) { return r.eventId === eventId && r.type === 'scenario'; });
+  const done = {};
+  if (user) readAll('Presentations', 5).forEach(function (r) { if (r.email === user.email && r.eventId === eventId) done[norm(r.title)] = true; });
+  const fresh = shuffled(pool).filter(function (r) { const sc = safeJson(r.json); return sc && !done[norm(sc.title)]; });
+  if (fresh.length) {
+    const pick = fresh[0];
+    try { withLock(function () { pick.uses = (Number(pick.uses) || 0) + 1; writeRow('Pool', pick._row, pick); }); } catch (_) { /* fine */ }
+    return safeJson(pick.json);
+  }
+  const made = writeScenario(j);
+  try { withLock(function () { appendRows('Pool', [{ id: 'sc' + Utilities.getUuid().replace(/-/g, '').slice(0, 10), eventId: eventId, type: 'scenario', json: JSON.stringify(made), created: nowIso(), uses: 1 }]); }); } catch (_) { /* fine */ }
+  return made;
+}
+function safeJson(v) { try { return JSON.parse(String(v || '')); } catch (_) { return null; } }
+
+function writeScenario(j) {
   const picks = shuffled(j.indicators).slice(0, 5);
   const prompt = [
     'Write a new practice role play scenario for the FBLA (Future Business Leaders of America) 2026–27 high school event "' + j.name + '", in the style of FBLA role play cards.',
@@ -1813,7 +1876,7 @@ function roleplayScenario(eventId) {
     type: 'OBJECT',
     properties: { title: { type: 'STRING' }, background: { type: 'STRING' }, yourRole: { type: 'STRING' }, judgeRole: { type: 'STRING' }, task: { type: 'STRING' }, indicators: { type: 'ARRAY', items: { type: 'STRING' } } },
     required: ['title', 'background', 'yourRole', 'judgeRole', 'task', 'indicators'],
-  }, 0.9);
+  }, 0.9, { label: 'Role play scenarios', maxTokens: 2000 });
   if (!out || !out.background || !out.task) throw fail('ai', 'The scenario didn’t come out right. Try again.');
   return {
     title: String(out.title || j.name).slice(0, 120), background: String(out.background).slice(0, 1500),
@@ -1837,7 +1900,7 @@ function roleplayInterject(eventId, sc, transcript, atSeconds) {
     'Interrupt with one short question, in character, that a real judge would ask now: push on something they just said, a cost or risk they skipped, or a performance indicator they haven’t covered yet. Under 25 words.',
     'Return JSON: {"question": "..."}',
   ].join('\n');
-  const out = aiCall(prompt, { type: 'OBJECT', properties: { question: { type: 'STRING' } }, required: ['question'] }, 0.7);
+  const out = aiCall(prompt, { type: 'OBJECT', properties: { question: { type: 'STRING' } }, required: ['question'] }, 0.7, { label: 'Role play interruptions', maxTokens: 500 });
   const q = String((out && out.question) || '').trim();
   if (!q) throw fail('ai', 'No question.');
   return { question: q.slice(0, 300) };
@@ -1888,8 +1951,12 @@ function adminReloadRubric(eventId) {
 function topUpBanks() {
   if (!aiProvider()) return;
   if (CacheService.getScriptCache().get('admin_loading')) return; // an officer is loading tests right now
-  const target = num('BANK_TARGET', 30);
-  const batches = num('TOPUP_BATCHES_PER_RUN', 2);
+  const baseTarget = num('BANK_TARGET', 24);
+  const batches = num('TOPUP_BATCHES_PER_RUN', 1);
+  // Only fill events someone has practiced, unless TOPUP_ALL is on.
+  const active = {};
+  if (String(prop('TOPUP_ALL', 'false')).toLowerCase() !== 'true') readAll('Stats', 5).forEach(function (r) { if (Number(r.attempts) > 0) active[r.eventId] = true; });
+  const fillAll = String(prop('TOPUP_ALL', 'false')).toLowerCase() === 'true';
   const started = Date.now();
   // First, read the official guidelines for any test that doesn't have topics yet (two per run).
   const waiting = readEvents().filter(function (e) { return e.guide && !e.topics.length && e.note.indexOf('Couldn') !== 0; });
@@ -1908,19 +1975,21 @@ function topUpBanks() {
   for (let i = 0; i < batches && Date.now() - started < 4 * 60 * 1000; i++) {
     const events = readEvents();
     const qs = readAll('Questions', 10).filter(function (r) { return r.status === 'active'; });
-    const per = Math.ceil(target / 3); // a third of each topic's target at each difficulty
     let best = null;
     events.forEach(function (e) {
+      if (!fillAll && !active[e.id]) return;
+      // Enough for a 100-question full test, split three ways by difficulty.
+      const per = Math.ceil(Math.max(baseTarget, Math.ceil(110 / Math.max(1, e.topics.length))) / 3);
       e.topics.forEach(function (t) {
         ['easy', 'medium', 'hard'].forEach(function (d) {
           const n = qs.filter(function (q) { return q.eventId === e.id && q.topic === t.name && diffOf(q) === d; }).length;
-          if (n < per && (!best || n < best.n)) best = { e: e, t: t, d: d, n: n };
+          if (n < per && (!best || n < best.n)) best = { e: e, t: t, d: d, n: n, per: per };
         });
       });
     });
     if (!best) return;
     try {
-      const rows = generateQuestions(best.e, best.t.name, Math.min(10, per - best.n), best.d);
+      const rows = generateQuestions(best.e, best.t.name, Math.min(20, best.per - best.n), best.d);
       console.log('Wrote ' + rows.length + ' ' + best.d + ' for ' + best.e.name + ' / ' + best.t.name);
     } catch (err) {
       console.warn('Top-up paused: ' + err.message);
@@ -1950,6 +2019,6 @@ function setup() {
 
 /** Run from the editor to check the AI connection. Writes nothing. */
 function testAi() {
-  const out = aiCall('Reply with JSON: {"ok": true, "model": "<your model name>"}', null, 0);
+  const out = aiCall('Reply with JSON: {"ok": true, "model": "<your model name>"}', null, 0, { label: 'Tests', maxTokens: 300 });
   console.log('Using ' + aiModelLabel() + ': ' + JSON.stringify(out));
 }
