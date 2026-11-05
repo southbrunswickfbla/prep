@@ -10,39 +10,53 @@ export class ApiError extends Error {
   }
 }
 
-let getToken: () => string | null = () => null;
-let onAuthError: () => void = () => {};
+type AuthHooks = {
+  /** A token for the next request. Renews it quietly if the saved one has run out. */
+  getToken: () => Promise<string | null>;
+  /** Forces a quiet renewal, for when the server says the token expired. */
+  renew: () => Promise<string | null>;
+  /** Renewal failed: show the sign-in page. */
+  onExpired: () => void;
+};
+let auth: AuthHooks = { getToken: async () => null, renew: async () => null, onExpired: () => {} };
 
-/** Called once by the auth provider so every request carries the Google sign-in token. */
-export function connectAuth(tokenGetter: () => string | null, authErrorHandler: () => void) {
-  getToken = tokenGetter;
-  onAuthError = authErrorHandler;
-}
+/** Called once by the auth provider so every request carries a fresh Google sign-in token. */
+export function connectAuth(hooks: AuthHooks) { auth = hooks; }
 
 type Envelope = { ok: boolean; data?: unknown; error?: string; code?: string };
 
-export async function call<T>(action: string, payload: Record<string, unknown> = {}): Promise<T> {
-  if (DEMO) return (await demoCall(action, payload)) as T;
+async function send(action: string, payload: Record<string, unknown>, idToken: string | null): Promise<Envelope> {
   let res: Response;
   try {
     // text/plain keeps this a "simple" request, so Apps Script doesn't need a CORS preflight.
     res = await fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, idToken: getToken(), ...payload }),
+      body: JSON.stringify({ action, idToken, ...payload }),
       redirect: 'follow',
     });
   } catch {
     throw new ApiError('Can’t reach FBLA Prep right now. Check your internet connection and try again.', 'network');
   }
-  let body: Envelope;
   try {
-    body = (await res.json()) as Envelope;
+    return (await res.json()) as Envelope;
   } catch {
     throw new ApiError('FBLA Prep sent back an unexpected reply. Try again in a minute.', 'bad_response');
   }
+}
+
+export async function call<T>(action: string, payload: Record<string, unknown> = {}): Promise<T> {
+  if (DEMO) return (await demoCall(action, payload)) as T;
+  const token = await auth.getToken();
+  if (!token) { auth.onExpired(); throw new ApiError('Sign in again to keep going.', 'auth'); }
+  let body = await send(action, payload, token);
+  if (!body.ok && body.code === 'auth') {
+    // The token ran out between checks. Renew once and try again before signing out.
+    const fresh = await auth.renew();
+    if (fresh) body = await send(action, payload, fresh);
+  }
   if (!body.ok) {
-    if (body.code === 'auth') onAuthError();
+    if (body.code === 'auth') auth.onExpired();
     throw new ApiError(body.error || 'Something went wrong. Try again.', body.code || 'error');
   }
   return body.data as T;

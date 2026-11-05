@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router';
 import { api, errorText } from '../lib/api';
 import { useData } from '../lib/data';
 import { clock, LETTERS, LEVEL_LABEL, MODE_LABEL, plural } from '../lib/format';
-import { btn, Notice } from '../components/Layout';
+import { btn, Icon, Notice, useFocusMode } from '../components/Layout';
 import { SESSION_KEY } from './Practice';
 import type { Question, StartRes } from '../types';
 
@@ -34,10 +34,10 @@ function Report({ q }: { q: Question }) {
   const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   useEffect(() => { setOpen(false); setState('idle'); }, [q.id]);
   if (state === 'sent') return <p className="text-[14px] font-semibold text-good">Thanks. Officers will review this question.</p>;
-  if (!open) return <button className="text-[14px] font-bold text-ink-3 hover:text-navy-950" onClick={() => setOpen(true)}>Report a problem with this question</button>;
+  if (!open) return <button className="text-[13px] font-bold text-ink-3 hover:text-navy-950" onClick={() => setOpen(true)}>Report a problem with this question</button>;
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <select value={reason} onChange={(e) => setReason(e.target.value)} className="cut-sm bg-paper px-3 py-2 text-[14px] font-semibold" aria-label="What’s wrong">
+      <select value={reason} onChange={(e) => setReason(e.target.value)} className="cut-sm bg-white px-3 py-2 text-[14px] font-semibold" aria-label="What’s wrong">
         {REASONS.map((r) => <option key={r}>{r}</option>)}
       </select>
       <button className={btn.quiet} disabled={state === 'sending'} onClick={async () => {
@@ -59,6 +59,8 @@ export function Session() {
   const [error, setError] = useState('');
   const [confirming, setConfirming] = useState(false);
   const submittedRef = useRef(false);
+  const [gridOpen, setGridOpen] = useState(false);
+  useFocusMode(!!s);
 
   const update = useCallback((fn: (prev: Saved) => Saved) => {
     setS((prev) => {
@@ -144,7 +146,7 @@ export function Session() {
     return (
       <div className="py-16">
         <h1 className="font-wide text-3xl font-black text-navy-950">No practice in progress</h1>
-        <Link to="/practice" className={`${btn.navy} mt-6`}>Pick an event</Link>
+        <Link to="/practice" className={`${btn.navy} mt-6`}>Pick a test</Link>
       </div>
     );
   }
@@ -155,75 +157,86 @@ export function Session() {
   const checkedCount = Object.keys(s.checked).length;
   const flaggedForReview = s.review.includes(q.id);
   const lowTime = remaining !== null && remaining < 300;
+  const exitTo = `/practice/${s.start.eventId}`;
+
+  function exit() {
+    if (isFull && answered > 0 && !window.confirm('Leave this test? Your answers stay saved on this device, and you can resume from the event page.')) return;
+    navigate(exitTo);
+  }
 
   return (
-    <div className="mx-auto max-w-3xl animate-rise">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <div className="font-semiwide text-[15px] font-extrabold text-navy-950">{s.start.eventName}</div>
-          <div className="text-[14px] text-ink-2">{MODE_LABEL[s.start.mode]}{s.start.mode !== 'review' && s.start.level ? `, ${LEVEL_LABEL[s.start.level]} level` : ''}</div>
+    <div className="mx-auto max-w-3xl">
+      {/* Focus-mode top bar */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <button onClick={exit} className="cut-sm grid h-10 w-10 shrink-0 place-items-center bg-white text-navy-900 hover:bg-navy-100" aria-label="Exit">
+            <Icon name="close" className="h-5 w-5" />
+          </button>
+          <div className="min-w-0">
+            <div className="truncate font-semiwide text-[15px] font-extrabold text-navy-950">{s.start.eventName}</div>
+            <div className="text-[13px] text-ink-2">{MODE_LABEL[s.start.mode]}{s.start.mode !== 'review' && s.start.level ? ` · ${LEVEL_LABEL[s.start.level]}` : ''}</div>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          {!isFull && checkedCount > 0 && <span className="cut-sm bg-good-100 px-3 py-1.5 text-[14px] font-bold text-good">{right} of {checkedCount} right</span>}
+        <div className="flex shrink-0 items-center gap-2">
+          {!isFull && checkedCount > 0 && <span className="cut-sm hidden bg-good-100 px-3 py-2 text-[13px] font-bold text-good xs:inline">{right} of {checkedCount} right</span>}
           <span
-            className={`cut-sm px-3 py-1.5 font-wide text-[18px] font-black tabular-nums ${lowTime ? 'bg-bad text-white' : 'bg-navy-900 text-gold'}`}
+            className={`cut-sm inline-flex items-center gap-1.5 px-3 py-2 font-wide text-[16px] font-black tabular-nums ${lowTime ? 'bg-bad text-white' : 'bg-navy-900 text-gold'}`}
             aria-label={remaining !== null ? 'Time left' : 'Time spent'}
           >
-            {remaining !== null ? clock(remaining) : clock(elapsed)}
+            <Icon name="clock" className="h-4 w-4" />{remaining !== null ? clock(remaining) : clock(elapsed)}
           </span>
         </div>
       </div>
 
-      <div className="mt-5 flex items-center gap-3">
-        <div className="h-1.5 flex-1 bg-navy-100"><div className="h-full bg-gold transition-[width]" style={{ width: `${((s.index + 1) / total) * 100}%` }} /></div>
-        <span className="text-[14px] font-bold text-ink-2">{s.index + 1} of {total}</span>
+      <div className="mt-4 flex items-center gap-3">
+        <div className="h-1.5 flex-1 bg-white"><div className="h-full bg-gold transition-[width]" style={{ width: `${((s.index + 1) / total) * 100}%` }} /></div>
+        <span className="text-[13px] font-bold tabular-nums text-ink-2">{s.index + 1} / {total}</span>
       </div>
 
-      {s.start.generated > 0 && s.index === 0 && !checked && (
-        <p className="mt-4 text-[14px] text-ink-2">{plural(s.start.generated, 'new question')} in this set.</p>
-      )}
-
-      <article className="cut mt-5 bg-white p-6 sm:p-8">
-        <div className="text-[13px] font-bold text-blue">{q.topic}</div>
-        <h1 className="mt-2 font-semiwide text-[clamp(19px,2.6vw,23px)] font-bold leading-snug text-navy-950">{q.stem}</h1>
-        <div className="mt-6 grid gap-2.5" role="radiogroup" aria-label="Answer choices">
+      <article key={q.id} className="cut mt-4 bg-white p-6 animate-rise sm:p-7 short:p-5">
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-[13px] font-bold text-blue">{q.topic}</span>
+          {s.start.generated > 0 && s.index === 0 && !checked && <span className="text-[12px] text-ink-3">{plural(s.start.generated, 'new question')}</span>}
+        </div>
+        <h1 className="mt-2 font-semiwide text-[clamp(18px,2.3vw,21px)] font-bold leading-snug text-navy-950">{q.stem}</h1>
+        <div className="mt-5 grid gap-2 short:mt-4" role="radiogroup" aria-label="Answer choices">
           {q.choices.map((c, i) => {
             const picked = chosen === i;
             const isAnswer = checked && i === q.answer;
             const isWrongPick = checked && picked && i !== q.answer;
-            const tone = isAnswer ? 'bg-good-100 inset-ring-2 inset-ring-good' : isWrongPick ? 'bg-bad-100 inset-ring-2 inset-ring-bad' : picked ? 'bg-navy-100 inset-ring-2 inset-ring-navy-900' : 'bg-paper hover:bg-navy-100/60';
+            const tone = isAnswer ? 'bg-good-100 inset-ring-2 inset-ring-good' : isWrongPick ? 'bg-bad-100 inset-ring-2 inset-ring-bad' : picked ? 'bg-navy-100 inset-ring-2 inset-ring-navy-900' : checked ? 'bg-navy-50' : 'bg-navy-50 hover:bg-navy-100';
             return (
               <button
                 key={i} role="radio" aria-checked={picked} disabled={checked || submitting}
                 onClick={() => choose(i)}
-                className={`cut-sm flex items-start gap-4 px-4 py-3.5 text-left text-[16px] transition ${tone} disabled:cursor-default`}
+                className={`cut-sm flex items-start gap-3.5 px-4 py-3 text-left text-[16px] transition short:py-2.5 ${tone} disabled:cursor-default`}
               >
-                <span className={`cut-sm grid h-8 w-8 shrink-0 place-items-center font-wide text-[14px] font-black ${isAnswer ? 'bg-good text-white' : isWrongPick ? 'bg-bad text-white' : picked ? 'bg-navy-900 text-gold' : 'bg-white text-navy-900'}`}>{LETTERS[i]}</span>
-                <span className="pt-1 font-medium text-ink">{c}</span>
+                <span className={`cut-sm grid h-7 w-7 shrink-0 place-items-center font-wide text-[13px] font-black ${isAnswer ? 'bg-good text-white' : isWrongPick ? 'bg-bad text-white' : picked ? 'bg-navy-900 text-gold' : 'bg-white text-navy-900'}`}>{LETTERS[i]}</span>
+                <span className="pt-0.5 font-medium text-ink">{c}</span>
               </button>
             );
           })}
         </div>
 
         {checked && (
-          <div className={`cut-sm mt-6 p-4 ${chosen === q.answer ? 'bg-good-100' : 'bg-bad-100'}`} role="status">
+          <div className={`cut-sm mt-5 p-4 ${chosen === q.answer ? 'bg-good-100' : 'bg-bad-100'}`} role="status">
             <div className={`font-semiwide font-extrabold ${chosen === q.answer ? 'text-good' : 'text-bad'}`}>
               {chosen === q.answer ? 'Correct.' : `Not quite. The answer is ${LETTERS[q.answer ?? 0]}.`}
             </div>
-            {q.explanation && <p className="mt-1.5 text-[15px] text-ink">{q.explanation}</p>}
+            {q.explanation && <p className="mt-1 text-[15px] text-ink">{q.explanation}</p>}
           </div>
         )}
 
-        <div className="mt-6 flex flex-wrap items-center gap-3">
+        <div className="mt-5 flex flex-wrap items-center gap-3">
           {isFull ? (
             <>
-              <button className={btn.quiet} disabled={s.index === 0} onClick={() => go(s.index - 1)}>Previous</button>
-              {!last && <button className={btn.navy} onClick={() => go(s.index + 1)}>Next</button>}
+              <button className={btn.quiet} disabled={s.index === 0} onClick={() => go(s.index - 1)}><Icon name="back" className="h-4 w-4" />Previous</button>
+              {!last && <button className={btn.navy} onClick={() => go(s.index + 1)}>Next<Icon name="arrow" className="h-4 w-4" /></button>}
               <button
                 className={`text-[14px] font-bold ${flaggedForReview ? 'text-navy-950' : 'text-ink-3 hover:text-navy-950'}`}
                 onClick={() => update((p) => ({ ...p, review: flaggedForReview ? p.review.filter((x) => x !== q.id) : [...p.review, q.id] }))}
               >
-                {flaggedForReview ? 'Marked for review' : 'Mark for review'}
+                {flaggedForReview ? '★ Marked for review' : '☆ Mark for review'}
               </button>
             </>
           ) : !checked ? (
@@ -231,17 +244,17 @@ export function Session() {
           ) : last ? (
             <button className={btn.gold} disabled={submitting} onClick={() => void submit()}>{submitting ? 'Saving…' : 'See results'}</button>
           ) : (
-            <button className={btn.navy} onClick={() => go(s.index + 1)}>Next question</button>
+            <button className={btn.navy} onClick={() => go(s.index + 1)}>Next question<Icon name="arrow" className="h-4 w-4" /></button>
           )}
         </div>
       </article>
 
-      <div className="mt-4"><Report q={q} /></div>
-
       {isFull && (
-        <section className="mt-8">
+        <section className="cut mt-3 bg-white p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-[14px] font-bold text-ink-2">{answered} of {total} answered{s.review.length ? `, ${s.review.length} marked for review` : ''}</p>
+            <button className="text-[14px] font-bold text-navy-950" onClick={() => setGridOpen(!gridOpen)} aria-expanded={gridOpen}>
+              {answered} of {total} answered{s.review.length ? `, ${s.review.length} marked` : ''} <span className="text-blue">{gridOpen ? 'Hide questions' : 'Show all questions'}</span>
+            </button>
             {!confirming
               ? <button className={btn.gold} disabled={submitting} onClick={() => (answered < total ? setConfirming(true) : void submit())}>{submitting ? 'Grading…' : 'Submit test'}</button>
               : (
@@ -252,24 +265,28 @@ export function Session() {
                 </div>
               )}
           </div>
-          <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(40px,1fr))] gap-1.5" aria-label="Jump to a question">
-            {s.start.questions.map((x, i) => {
-              const done = s.answers[x.id] !== undefined;
-              const rev = s.review.includes(x.id);
-              return (
-                <button
-                  key={x.id} onClick={() => go(i)} aria-label={`Question ${i + 1}${done ? ', answered' : ''}${rev ? ', marked for review' : ''}`}
-                  className={`cut-sm h-10 text-[13px] font-black ${i === s.index ? 'inset-ring-[3px] inset-ring-blue' : ''} ${rev ? 'bg-gold text-navy-950' : done ? 'bg-navy-900 text-white' : 'bg-white text-ink-2'}`}
-                >{i + 1}</button>
-              );
-            })}
-          </div>
+          {gridOpen && (
+            <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(38px,1fr))] gap-1.5" aria-label="Jump to a question">
+              {s.start.questions.map((x, i) => {
+                const done = s.answers[x.id] !== undefined;
+                const rev = s.review.includes(x.id);
+                return (
+                  <button
+                    key={x.id} onClick={() => go(i)} aria-label={`Question ${i + 1}${done ? ', answered' : ''}${rev ? ', marked for review' : ''}`}
+                    className={`cut-sm h-9 text-[12px] font-black ${i === s.index ? 'inset-ring-[3px] inset-ring-blue' : ''} ${rev ? 'bg-gold text-navy-950' : done ? 'bg-navy-900 text-white' : 'bg-navy-50 text-ink-2'}`}
+                  >{i + 1}</button>
+                );
+              })}
+            </div>
+          )}
         </section>
       )}
 
-      {error && <div className="mt-6"><Notice tone="bad">{error}</Notice></div>}
-      {!isFull && <p className="mt-8 text-[13px] text-ink-3">Keys: 1–4 to answer, Enter to check.</p>}
-      {isFull && <p className="mt-8 text-[13px] text-ink-3">Keys: 1–4 to answer, arrows to move.</p>}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <Report q={q} />
+        <span className="hidden text-[12px] text-ink-3 sm:inline">{isFull ? 'Keys: 1–4 to answer, arrows to move' : 'Keys: 1–4 to answer, Enter to check'}</span>
+      </div>
+      {error && <div className="mt-4"><Notice tone="bad">{error}</Notice></div>}
     </div>
   );
 }

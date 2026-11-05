@@ -101,11 +101,15 @@ The 12 role play events have their own **Role plays** page. Their test round sta
 
 FBLA Prep is set up to stretch Groq's free allowance:
 
-- **Speech:** Chrome's built-in speech-to-text is used first, for free. Groq's Whisper is only used if Chrome's doesn't work, or if a member picks it to count filler words.
+- **Speech:** every recording is transcribed by Groq's Whisper, which also counts filler words and long pauses. Chrome's built-in speech-to-text isn't used.
 - **Two models:** light jobs (easy questions, study guides, scenarios, interruptions) use `openai/gpt-oss-20b` with low thinking. Scoring, hard questions, and reading guidelines use `openai/gpt-oss-120b`. Groq's limits are per model, so this roughly doubles what you can do.
 - **Questions:** the timer only fills events members have practiced (set `TOPUP_ALL` to `true` to fill all 45), writes 20 at a time, and stops at about 24 per topic. Drills only write questions when a topic runs out. After that, members see repeats, oldest first.
 - **Reuse:** role play scenarios and practice prompts are saved in the **Pool** tab and reused. A member gets a new scenario only after doing every saved one.
 - **See where it goes:** the Admin page shows today's AI use by feature and the last 7 days.
+
+## Staying signed in
+
+Google's sign-in token only lasts an hour. The website saves it on the device and asks Google for a fresh one a few minutes before it runs out, and whenever the tab comes back into view. For a member who has signed in before, Google does this without a click, so members stay signed in until they click **Sign out**. If Google can't renew quietly on a device, the member sees Google's one-tap prompt, or the sign-in page if that's dismissed. No backend change is needed for this.
 
 ## Try it locally
 

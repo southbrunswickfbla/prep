@@ -3,7 +3,10 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { api, errorText } from '../lib/api';
 import { useData } from '../lib/data';
 import { LEVEL_LABEL, savedLevel, shortDate } from '../lib/format';
-import { btn, Loading, Notice } from '../components/Layout';
+import { btn, card, Icon, Loading, Notice } from '../components/Layout';
+import { StudySources } from '../components/Bits';
+import { guidesFor } from '../data/guides';
+import { STUDY_LABEL, STUDY_LINKS } from '../data/studyLinks';
 import { beginSession } from './Practice';
 import type { StudyNotes } from '../types';
 
@@ -26,7 +29,7 @@ function Markdown({ text }: { text: string }) {
     if (!line) { flush(); return; }
     if (/^#{1,3}\s/.test(line)) {
       flush();
-      blocks.push(<h2 key={blocks.length} className="mt-8 font-semiwide text-xl font-extrabold text-navy-950 first:mt-0">{line.replace(/^#{1,3}\s/, '')}</h2>);
+      blocks.push(<h2 key={blocks.length} className="mt-7 font-semiwide text-[19px] font-extrabold text-navy-950 first:mt-0">{line.replace(/^#{1,3}\s/, '')}</h2>);
     } else if (/^[-*•]\s/.test(line)) {
       bullets.push(line.replace(/^[-*•]\s/, ''));
     } else {
@@ -61,31 +64,47 @@ export function Study() {
     catch (e) { setError(errorText(e)); setBusy(false); }
   }
 
+  const study = event ? STUDY_LINKS[event.name] : undefined;
   return (
-    <div className="mx-auto max-w-3xl animate-rise">
-      <Link to={`/practice/${eventId}`} className="text-[14px] font-bold text-ink-2 hover:text-navy-950">{event?.name || 'Back to the event'}</Link>
-      <h1 className="mt-3 font-wide text-[clamp(28px,4.5vw,42px)] font-black leading-[1.02] tracking-tight text-navy-950">{topic}</h1>
+    <div className="animate-rise">
+      <Link to={`/practice/${eventId}`} className={`${btn.ghost} mb-3`}><Icon name="back" className="h-4 w-4" stroke={2.4} />{event?.name || 'Back to the event'}</Link>
+      <h1 className="font-wide text-[clamp(26px,3.4vw,38px)] font-black leading-[1.04] tracking-tight text-navy-950">{topic}</h1>
       {t?.items ? <p className="mt-2 text-[15px] text-ink-2">{t.items} questions on the real test.</p> : null}
 
-      {error && <div className="mt-6"><Notice tone="bad">{error}</Notice></div>}
-      {!notes && !error && <Loading label="Writing the study guide…" />}
-      {notes && (
-        <article className="cut mt-6 bg-white p-6 sm:p-8">
-          <Markdown text={notes.content} />
-          <p className="mt-8 border-t border-line pt-4 text-[13px] text-ink-3">
-            Written {shortDate(notes.updated)} from the 2026–27 guidelines.
-          </p>
-        </article>
-      )}
-
-      <div className="mt-6 flex flex-wrap gap-3">
-        <button className={btn.gold} disabled={busy} onClick={() => void drill()}>{busy ? 'Starting…' : `Drill this topic (${LEVEL_LABEL[level]})`}</button>
-        {data?.me.admin && notes && (
-          <button className={btn.quiet} disabled={busy} onClick={async () => {
-            setBusy(true); setError('');
-            try { setNotes(await api.notes(eventId, topic, true)); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
-          }}>Rewrite this guide</button>
-        )}
+      <div className="mt-6 grid gap-x-8 gap-y-6 lg:grid-cols-[1fr_300px]">
+        <div className="min-w-0">
+          {error && <Notice tone="bad">{error}</Notice>}
+          {!notes && !error && <Loading label="Writing the study guide…" />}
+          {notes && (
+            <article className={`${card} p-6 sm:p-8`}>
+              <Markdown text={notes.content} />
+              <p className="mt-8 border-t border-line pt-4 text-[13px] text-ink-3">
+                Written {shortDate(notes.updated)} from the 2026–27 guidelines. Check facts against the sources on this page.
+              </p>
+            </article>
+          )}
+          <div className="mt-5 flex flex-wrap gap-3">
+            <button className={btn.gold} disabled={busy} onClick={() => void drill()}>{busy ? 'Starting…' : `Drill this topic (${LEVEL_LABEL[level]})`}</button>
+            {data?.me.admin && notes && (
+              <button className={btn.quiet} disabled={busy} onClick={async () => {
+                setBusy(true); setError('');
+                try { setNotes(await api.notes(eventId, topic, true)); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
+              }}>Rewrite this guide</button>
+            )}
+          </div>
+        </div>
+        <aside className="lg:sticky lg:top-24 lg:self-start">
+          <div className={`${card} p-5`}>
+            <h2 className="font-semiwide text-[17px] font-extrabold text-navy-950">Go deeper</h2>
+            <div className="mt-4">
+              <StudySources
+                guides={event ? guidesFor(event.name) : []}
+                chapter={study ? { label: STUDY_LABEL[study.kind], url: study.url } : null}
+                official={event?.guide ? [{ label: '2026–27 guidelines', url: event.guide }] : []}
+              />
+            </div>
+          </div>
+        </aside>
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ type GoogleId = {
   initialize: (o: Record<string, unknown>) => void;
   renderButton: (el: HTMLElement, o: Record<string, unknown>) => void;
   prompt: () => void;
+  cancel: () => void;
   disableAutoSelect: () => void;
 };
 declare global { interface Window { google?: { accounts?: { id?: GoogleId } } } }
@@ -22,7 +23,20 @@ type AuthState = {
 };
 
 const AuthContext = createContext<AuthState | null>(null);
-const STORE = 'fblaprep.idToken';
+
+/*
+ * Google's sign-in token lasts one hour. To keep members signed in:
+ *  - the token and profile are kept in localStorage, so closing the tab doesn't sign anyone out;
+ *  - before the token runs out (and whenever the tab comes back into view), Google is asked for a
+ *    fresh one with auto sign-in, which needs no click for a returning member;
+ *  - a request that comes back "expired" renews once and retries before giving up.
+ * Members are only shown the sign-in page if Google can't renew, or after they sign out on purpose.
+ */
+const TOKEN_KEY = 'fblaprep.token';
+const PROFILE_KEY = 'fblaprep.profile';
+const OUT_KEY = 'fblaprep.signedOut';
+const RENEW_EARLY_MS = 5 * 60_000;
+const RENEW_WAIT_MS = 12_000;
 
 function decode(jwt: string): Record<string, unknown> | null {
   try {
@@ -31,6 +45,7 @@ function decode(jwt: string): Record<string, unknown> | null {
     return JSON.parse(json) as Record<string, unknown>;
   } catch { return null; }
 }
+function expiry(jwt: string): number { return Number(decode(jwt)?.exp || 0) * 1000; }
 function profileFrom(claims: Record<string, unknown>): Profile {
   const email = String(claims.email || '').toLowerCase();
   return {
@@ -40,6 +55,11 @@ function profileFrom(claims: Record<string, unknown>): Profile {
     picture: String(claims.picture || ''),
   };
 }
+const store = {
+  get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
+  del: (k: string) => { try { localStorage.removeItem(k); } catch { /* ignore */ } },
+};
 
 let gisPromise: Promise<void> | null = null;
 function loadGis(): Promise<void> {
@@ -58,96 +78,146 @@ function loadGis(): Promise<void> {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [status, setStatus] = useState<Status>('loading');
   const [error, setError] = useState('');
-  const tokenRef = useRef<string | null>(null);
-  const ready = useRef(false);
+  const token = useRef<string | null>(null);
+  const exp = useRef(0);
+  const initialized = useRef(false);
+  const waiters = useRef<((t: string | null) => void)[]>([]);
+  const renewing = useRef<Promise<string | null> | null>(null);
+  const [tokenTick, setTokenTick] = useState(0);
 
-  const clear = useCallback(() => {
-    tokenRef.current = null;
-    setToken(null); setProfile(null); setStatus('signedOut');
-    try { sessionStorage.removeItem(STORE); } catch { /* ignore */ }
+  const settle = useCallback((t: string | null) => {
+    const w = waiters.current;
+    waiters.current = [];
+    renewing.current = null;
+    w.forEach((fn) => fn(t));
   }, []);
 
-  const accept = useCallback((jwt: string) => {
+  const clear = useCallback((message = '') => {
+    token.current = null; exp.current = 0;
+    store.del(TOKEN_KEY); store.del(PROFILE_KEY);
+    setProfile(null); setStatus('signedOut'); setError(message);
+    settle(null);
+  }, [settle]);
+
+  /** Takes a Google credential: checks the school domain, saves it, and signs the member in. */
+  const accept = useCallback((jwt: string): boolean => {
     const claims = decode(jwt);
-    if (!claims) { setError('Google sign-in didn’t work. Try again.'); return; }
+    if (!claims) { setError('Google sign-in didn’t work. Try again.'); return false; }
     const p = profileFrom(claims);
     const domain = p.email.split('@')[1] || '';
     if (!ALLOWED_DOMAINS.includes(domain)) {
-      setError(`Sign in with your school Google account (@${ALLOWED_DOMAINS[0]}), not ${p.email}.`);
       window.google?.accounts?.id?.disableAutoSelect();
-      clear();
-      return;
+      clear(`Sign in with your school Google account (@${ALLOWED_DOMAINS[0]}), not ${p.email}.`);
+      return false;
     }
-    setError('');
-    tokenRef.current = jwt;
-    setToken(jwt); setProfile(p); setStatus('signedIn');
-    try { sessionStorage.setItem(STORE, jwt); } catch { /* ignore */ }
-  }, [clear]);
+    token.current = jwt; exp.current = expiry(jwt);
+    store.set(TOKEN_KEY, jwt); store.set(PROFILE_KEY, JSON.stringify(p)); store.del(OUT_KEY);
+    setProfile(p); setStatus('signedIn'); setError('');
+    setTokenTick((n) => n + 1);
+    settle(jwt);
+    return true;
+  }, [clear, settle]);
+
+  const acceptRef = useRef(accept);
+  acceptRef.current = accept;
+
+  const init = useCallback(async () => {
+    await loadGis();
+    if (initialized.current) return;
+    initialized.current = true;
+    window.google!.accounts!.id!.initialize({
+      client_id: CLIENT_ID,
+      callback: (r: { credential?: string }) => { if (r.credential) acceptRef.current(r.credential); },
+      auto_select: true,
+      cancel_on_tap_outside: false,
+      use_fedcm_for_prompt: true,
+      itp_support: true,
+      context: 'signin',
+    });
+  }, []);
+
+  /** Asks Google for a fresh token without a click. Resolves to null if it can't. */
+  const renew = useCallback((): Promise<string | null> => {
+    if (DEMO) return Promise.resolve('demo');
+    if (renewing.current) return renewing.current;
+    renewing.current = new Promise<string | null>((resolve) => {
+      waiters.current.push(resolve);
+      init()
+        .then(() => { try { window.google?.accounts?.id?.prompt(); } catch { settle(null); } })
+        .catch(() => settle(null));
+      setTimeout(() => { if (renewing.current) settle(null); }, RENEW_WAIT_MS);
+    });
+    return renewing.current;
+  }, [init, settle]);
+
+  /** A usable token for the next request: the saved one, or a renewed one. */
+  const getToken = useCallback(async (): Promise<string | null> => {
+    if (DEMO) return 'demo';
+    if (token.current && exp.current - Date.now() > 60_000) return token.current;
+    return renew();
+  }, [renew]);
 
   useEffect(() => {
-    connectAuth(() => tokenRef.current, () => {
-      clear();
-      setError('Your sign-in expired. Sign in again. Your answers are saved.');
+    connectAuth({
+      getToken,
+      renew,
+      onExpired: () => clear('Your sign-in ran out. Sign in again. Your progress is saved.'),
     });
-  }, [clear]);
+  }, [getToken, renew, clear]);
 
-  // Restore a still-valid token after a reload.
+  // On load: use the saved token, or renew it quietly if this member was signed in before.
   useEffect(() => {
     if (DEMO) { setStatus('signedOut'); return; }
-    let saved: string | null = null;
-    try { saved = sessionStorage.getItem(STORE); } catch { /* ignore */ }
-    const claims = saved ? decode(saved) : null;
-    if (saved && claims && Number(claims.exp) * 1000 > Date.now() + 60_000) accept(saved);
-    else setStatus('signedOut');
-    if (!CLIENT_ID) { setError('Google sign-in isn’t set up yet. Officers: add VITE_GOOGLE_CLIENT_ID.'); return; }
-    loadGis().then(() => {
-      if (ready.current) return;
-      ready.current = true;
-      window.google!.accounts!.id!.initialize({
-        client_id: CLIENT_ID,
-        callback: (r: { credential?: string }) => { if (r.credential) accept(r.credential); },
-        auto_select: true,
-        cancel_on_tap_outside: true,
-        use_fedcm_for_prompt: true,
-        itp_support: true,
-      });
-    }).catch(() => setError('Google sign-in couldn’t load. Check your connection, or ask IT whether accounts.google.com is blocked.'));
-  }, [accept]);
+    if (!CLIENT_ID) { setStatus('signedOut'); setError('Google sign-in isn’t set up yet. Officers: add VITE_GOOGLE_CLIENT_ID.'); return; }
+    const saved = store.get(TOKEN_KEY);
+    let known: Profile | null = null;
+    try { known = JSON.parse(store.get(PROFILE_KEY) || 'null') as Profile | null; } catch { known = null; }
+    if (saved && expiry(saved) - Date.now() > 60_000) {
+      accept(saved);
+    } else if (known && !store.get(OUT_KEY)) {
+      // Show the site right away. The first request waits for Google to renew the token.
+      setProfile(known); setStatus('signedIn');
+      void renew();
+    } else {
+      setStatus('signedOut');
+    }
+    init().catch(() => setError('Google sign-in couldn’t load. Check your connection, or ask IT whether accounts.google.com is blocked.'));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Sign out when the Google token expires (they last about an hour), and try a silent refresh first.
+  // Renew a few minutes before the hour is up, and when the tab comes back into view.
   useEffect(() => {
-    if (!token || DEMO) return;
-    const claims = decode(token);
-    const ms = Number(claims?.exp) * 1000 - Date.now() - 45_000;
-    const t = setTimeout(() => {
-      try { window.google?.accounts?.id?.prompt(); } catch { /* ignore */ }
-      setTimeout(() => { if (tokenRef.current === token) { clear(); setError('Your sign-in expired. Sign in again to keep going.'); } }, 30_000);
-    }, Math.max(0, ms));
-    return () => clearTimeout(t);
-  }, [token, clear]);
+    if (DEMO || status !== 'signedIn' || !token.current) return;
+    const t = setTimeout(() => { void renew(); }, Math.max(0, exp.current - Date.now() - RENEW_EARLY_MS));
+    const onShow = () => {
+      if (document.visibilityState === 'visible' && exp.current - Date.now() < RENEW_EARLY_MS) void renew();
+    };
+    document.addEventListener('visibilitychange', onShow);
+    window.addEventListener('focus', onShow);
+    return () => { clearTimeout(t); document.removeEventListener('visibilitychange', onShow); window.removeEventListener('focus', onShow); };
+  }, [status, tokenTick, renew]);
 
   const renderButton = useCallback((el: HTMLElement | null) => {
     if (!el || DEMO || !CLIENT_ID) return;
-    loadGis().then(() => {
+    init().then(() => {
       const id = window.google?.accounts?.id;
       if (!id) return;
       el.innerHTML = '';
-      id.renderButton(el, { theme: 'filled_blue', size: 'large', shape: 'rectangular', text: 'signin_with', logo_alignment: 'left', width: 280 });
+      id.renderButton(el, { theme: 'filled_blue', size: 'large', shape: 'rectangular', text: 'signin_with', logo_alignment: 'left', width: 260 });
     }).catch(() => {});
-  }, []);
+  }, [init]);
 
   const signOut = useCallback(() => {
-    window.google?.accounts?.id?.disableAutoSelect();
+    try { window.google?.accounts?.id?.disableAutoSelect(); } catch { /* ignore */ }
+    store.set(OUT_KEY, '1');
     clear();
   }, [clear]);
 
   const demoSignIn = useCallback(() => {
-    tokenRef.current = 'demo';
-    setToken('demo');
+    token.current = 'demo'; exp.current = Date.now() + 365 * 86_400_000;
     setProfile({ email: 'demo@sbstudents.org', name: 'Demo Member', givenName: 'Demo', picture: '' });
     setStatus('signedIn');
   }, []);

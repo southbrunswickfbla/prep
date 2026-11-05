@@ -1,21 +1,23 @@
 @import "tailwindcss";
 @import "@fontsource-variable/archivo/wdth.css";
 
-/* Matches the chapter site: Archivo wide and bold, navy and gold, angled cut corners. */
+/* Chapter brand: Archivo wide and bold, navy and gold, cut corners. */
 @theme {
   --font-sans: "Archivo Variable", "Archivo", "Arial", system-ui, sans-serif;
   --color-navy-950: #06122e;
   --color-navy-900: #0b1f4d;
   --color-navy-800: #13295e;
   --color-navy-700: #1d3a7a;
+  --color-navy-300: #9eacd0;
   --color-navy-200: #c3cde6;
   --color-navy-100: #e3e8f5;
+  --color-navy-50: #f2f4fa;
   --color-blue: #1d52bc;
   --color-gold: #f2b33d;
   --color-gold-300: #f7cd72;
   --color-gold-100: #fdf1d6;
-  --color-paper: #f4f5f9;
-  --color-line: #dce1ec;
+  --color-paper: #eef1f7;
+  --color-line: #dde2ed;
   --color-ink: #0d1a3a;
   --color-ink-2: #4b5878;
   --color-ink-3: #7a85a2;
@@ -26,9 +28,9 @@
   --breakpoint-xs: 420px;
 }
 
-@custom-variant short (@media (max-height: 760px));
+@custom-variant short (@media (max-height: 800px));
 
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scrollbar-gutter: stable; }
 body {
   margin: 0;
   background: var(--color-paper);
@@ -45,38 +47,31 @@ body {
 
 /* Angled cut corners, top-left and bottom-right */
 @utility cut {
-  clip-path: polygon(16px 0, 100% 0, 100% calc(100% - 16px), calc(100% - 16px) 100%, 0 100%, 0 16px);
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
 }
 @utility cut-sm {
-  clip-path: polygon(9px 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%, 0 9px);
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
 }
 @utility cut-lg {
-  clip-path: polygon(28px 0, 100% 0, 100% calc(100% - 28px), calc(100% - 28px) 100%, 0 100%, 0 28px);
+  clip-path: polygon(26px 0, 100% 0, 100% calc(100% - 26px), calc(100% - 26px) 100%, 0 100%, 0 26px);
 }
 
-/* Navy ledger paper: ruled lines, a gold margin rule, soft glows */
+/* Navy ledger paper: ruled lines, a gold margin rule, a soft blue glow */
 @utility ledger {
   background-color: var(--color-navy-900);
   background-image:
-    linear-gradient(90deg, transparent 54px, rgb(242 179 61 / 0.6) 54px, rgb(242 179 61 / 0.6) 56px, transparent 56px),
-    repeating-linear-gradient(180deg, transparent 0 31px, rgb(255 255 255 / 0.06) 31px 32px),
-    radial-gradient(700px 360px at 100% 0%, rgb(29 82 188 / 0.5), transparent 70%);
+    linear-gradient(90deg, transparent 40px, rgb(242 179 61 / 0.55) 40px, rgb(242 179 61 / 0.55) 42px, transparent 42px),
+    repeating-linear-gradient(180deg, transparent 0 31px, rgb(255 255 255 / 0.055) 31px 32px),
+    radial-gradient(640px 320px at 100% 0%, rgb(29 82 188 / 0.55), transparent 70%);
 }
 
-@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-@utility animate-rise { animation: rise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
-@keyframes pulse-ring { from { box-shadow: 0 0 0 0 rgb(242 179 61 / 0.6); } to { box-shadow: 0 0 0 14px rgb(242 179 61 / 0); } }
-@utility animate-ring { animation: pulse-ring 1.2s ease-out 2; }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@utility animate-rise { animation: rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+/* Answer-sheet bubbles: the landing page's one animated moment. */
+@keyframes bubble-fill { from { background-color: transparent; transform: scale(0.5); } 60% { transform: scale(1.12); } to { background-color: var(--color-gold); transform: none; } }
+@utility bubble-fill { animation: bubble-fill 0.42s cubic-bezier(0.3, 1.4, 0.5, 1) both; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
-
-/* Answer-sheet bubbles: the landing page's one animated moment. */
-@keyframes bubble-fill { from { background-color: transparent; transform: scale(0.6); } 60% { transform: scale(1.12); } to { background-color: var(--color-gold); transform: none; } }
-@utility bubble-fill { animation: bubble-fill 0.42s cubic-bezier(0.3, 1.4, 0.5, 1) both; }
-
-/* Ruled rows, like a rating sheet. */
-@utility rule-top { box-shadow: inset 0 3px 0 var(--color-navy-900); }
-
-html { scrollbar-gutter: stable; }
